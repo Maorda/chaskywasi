@@ -3,7 +3,7 @@ requires = ["hatchling>=1.18.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mi-libreria-nombre"  # Cambia por el nombre único de tu librería en PyPI
+name = "chaskywasi"  # <-- Cambiado al nombre real de tu librería
 version = "0.1.0"
 description = "Una descripción corta y clara de tu librería en Python."
 readme = "README.md"
@@ -23,12 +23,12 @@ classifiers = [
 ]
 requires-python = ">=3.8"
 dependencies = [
-    # Agrega aquí las dependencias externas que requiera tu librería (ej: "requests>=2.28.0")
+    # Agrega aquí tus dependencias si las necesitas
 ]
 
 [project.urls]
-Homepage = "https://github.com/tu-usuario/mi-libreria-nombre"
-Issues = "https://github.com/tu-usuario/mi-libreria-nombre/issues"
+Homepage = "https://github.com/Maorda/chaskywasi"  # <-- Actualizado con tu usuario de Git visible en consola
+Issues = "https://github.com/Maorda/chaskywasi/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/chaskiwasi/*"]  # Cambia por la ruta donde esté el código fuente de tu librería
+packages = ["src/chaskywasi"]  # <-- Asegura que coincida con la carpeta dentro de src/
