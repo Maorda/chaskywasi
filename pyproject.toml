@@ -31,4 +31,4 @@ Homepage = "https://github.com/tu-usuario/mi-libreria-nombre"
 Issues = "https://github.com/tu-usuario/mi-libreria-nombre/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mi_libreria"]  # Cambia por la ruta donde esté el código fuente de tu librería
+packages = ["src/chaskiwasi/*"]  # Cambia por la ruta donde esté el código fuente de tu librería
