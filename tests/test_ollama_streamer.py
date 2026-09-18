@@ -25,7 +25,7 @@ def test_stream_response_yields_each_fragment_sequentially() -> None:
     mock_response.raise_for_status.return_value = None
 
     with patch(
-        "dantesito.chasky.query_engine.ollama_streamer.requests.post",
+        "chaskiwasi.query_engine.ollama_streamer.requests.post",
         return_value=mock_response,
     ) as mock_post:
         result: List[str] = list(
@@ -69,7 +69,7 @@ def test_stream_response_uses_required_hardware_constraints() -> None:
     mock_response.raise_for_status.return_value = None
 
     with patch(
-        "dantesito.chasky.query_engine.ollama_streamer.requests.post",
+        "chaskiwasi.query_engine.ollama_streamer.requests.post",
         return_value=mock_response,
     ) as mock_post:
         result: List[str] = list(
@@ -102,7 +102,7 @@ def test_stream_response_ignores_empty_and_invalid_lines() -> None:
     mock_response.raise_for_status.return_value = None
 
     with patch(
-        "dantesito.chasky.query_engine.ollama_streamer.requests.post",
+        "chaskiwasi.query_engine.ollama_streamer.requests.post",
         return_value=mock_response,
     ):
         result: List[str] = list(
@@ -116,7 +116,7 @@ def test_stream_response_handles_connection_error_cleanly() -> None:
     streamer = OllamaStreamer()
 
     with patch(
-        "dantesito.chasky.query_engine.ollama_streamer.requests.post",
+        "chaskiwasi.query_engine.ollama_streamer.requests.post",
         side_effect=requests.exceptions.ConnectionError,
     ) as mock_post:
         result: List[str] = list(
@@ -148,7 +148,7 @@ def test_stream_response_preserves_network_fragment_order() -> None:
     mock_response.raise_for_status.return_value = None
 
     with patch(
-        "dantesito.chasky.query_engine.ollama_streamer.requests.post",
+        "chaskiwasi.query_engine.ollama_streamer.requests.post",
         return_value=mock_response,
     ):
         result: List[str] = list(
