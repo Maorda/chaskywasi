@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chaskiwasi"  # <-- Cambiado al nombre real de tu librería
-version = "0.1.2"
-description = "Una descripción corta y clara de tu librería en Python."
+version = "0.2.0"
+description = "Sistema de consulta semántica para fuentes jurídicas."
 readme = "README.md"
 authors = [
-    { name = "Tu Nombre", email = "tu.correo@ejemplo.com" }
+    { name = "Luis Maurtua", email = "luis.maurtua@ejemplo.com" }
 ]
 license = { text = "MIT" }
 classifiers = [
