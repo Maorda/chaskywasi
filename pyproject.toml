@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chaskywasi"  # <-- Cambiado al nombre real de tu librería
-version = "0.1.0"
+version = "0.1.1"
 description = "Una descripción corta y clara de tu librería en Python."
 readme = "README.md"
 authors = [
@@ -23,7 +23,22 @@ classifiers = [
 ]
 requires-python = ">=3.8"
 dependencies = [
-    # Agrega aquí tus dependencias si las necesitas
+    "docling>=2.0.0",
+    "tiktoken>=0.7.0",
+    "chromadb>=0.5.0",
+    "ijson>=3.3.0",
+    "requests>=2.32.0",
+    "streamlit>=1.30.0",
+    "google-genai>=0.1.0",
+    "httpx>=0.27.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "anyio>=4.0.0",
+    "faker>=20.0.0"
 ]
 
 [project.urls]
@@ -31,4 +46,4 @@ Homepage = "https://github.com/Maorda/chaskywasi"  # <-- Actualizado con tu usua
 Issues = "https://github.com/Maorda/chaskywasi/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/chaskywasi"]  # <-- Asegura que coincida con la carpeta dentro de src/
+packages = ["src/chaskiwasi"]  # <-- Asegura que coincida con la carpeta dentro de src/
