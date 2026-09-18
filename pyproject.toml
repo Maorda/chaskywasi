@@ -40,8 +40,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Maorda/chaskywasi"  # <-- Actualizado con tu usuario de Git visible en consola
+Homepage = "https://github.com/Maorda/chaskywasi"
 Issues = "https://github.com/Maorda/chaskywasi/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/chaskiwasi"]  # <-- Asegura que coincida con la carpeta dentro de src/
+packages = ["src/chaskiwasi"]
