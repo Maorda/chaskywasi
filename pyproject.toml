@@ -3,8 +3,8 @@ requires = ["hatchling>=1.18.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "chaskywasi"  # <-- Cambiado al nombre real de tu librería
-version = "0.1.1"
+name = "chaskiwasi"  # <-- Cambiado al nombre real de tu librería
+version = "0.1.2"
 description = "Una descripción corta y clara de tu librería en Python."
 readme = "README.md"
 authors = [
