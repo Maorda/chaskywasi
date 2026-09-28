@@ -45,3 +45,9 @@ Issues = "https://github.com/Maorda/chaskywasi/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/chaskiwasi"]
+
+# REEMPLAZA EL BLOQUE ANTERIOR POR ESTE CON LA RUTA INTERNA REAL:
+[project.entry-points."chaskywasi.taxonomy"]
+taxonomia_oficial = "chaskiwasi.config.mis_taxonomias:cargar_taxonomia_peru"
+
+
