@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chaskiwasi"  # <-- Cambiado al nombre real de tu librería
-version = "0.2.0"
+version = "0.2.1"
 description = "Sistema de consulta semántica para fuentes jurídicas."
 readme = "README.md"
 authors = [
