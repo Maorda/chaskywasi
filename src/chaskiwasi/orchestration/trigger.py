@@ -1,14 +1,25 @@
-# chaskiwasi/orchestration/trigger.py
+# D:\libs\chaskywasi\src\chaskiwasi\orchestration\trigger.py
 import asyncio
+import json
 import sys
 from pathlib import Path
 from loguru import logger
 from typing import List
 
-# Importaciones cruzadas de tus dos librerías andinas locales
+# Importaciones cruzadas del ecosistema andino
 from chaskitambo import ChaskitamboEngine, ChaskiDocument
 from chaskiwasi.classification.cascade_factory import CascadeFactory
 from chaskiwasi.consolidation.consolidator import ChaskyConsolidator
+
+# 🚀 CONECTOR MAESTRO CON QUIPU
+try:
+    from quipu.main import procesar_expediente_completo
+    from quipu.config.settings import QuipuSettings
+    _QUIPU_AVAILABLE = True
+    logger.info("🚚 [SYSTEM] Librería de transporte 'quipu' acoplada con éxito al disparador.")
+except ImportError:
+    _QUIPU_AVAILABLE = False
+    logger.warning("⚠️ [SYSTEM] La librería 'quipu' no está enlazada en este entorno virtual.")
 
 
 class ChaskywasiTrigger:
@@ -16,8 +27,8 @@ class ChaskywasiTrigger:
     Gatillador y Orquestador Supremo del ecosistema.
     
     Reside en chaskywasi y se encarga de despertar al motor de chaskitambo,
-    recibir secuencialmente sus documentos en tiempo real mediante streaming de memoria,
-    y enviarlos al pipeline de consolidación RAG (Docling + Cascade + ChromaDB).
+    recibir EN TIEMPO REAL cada documento mediante streaming de memoria,
+    procesarlo por Docling e inyectarlo inmediatamente a NestJS usando quipu.
     """
 
     def __init__(self, cascade_factory: CascadeFactory, output_dir: str | Path = "./reportes_maestros"):
@@ -28,75 +39,91 @@ class ChaskywasiTrigger:
 
     async def orchestrate_extraction_and_rag(self, global_id: str, plugin_names: List[str]):
         """
-        Dispara el raspado paralelo en chaskitambo y procesa los documentos 
-        de forma secuencial a medida que van llegando en memoria.
+        Dispara el raspado paralelo en chaskitambo, procesando y despachando
+        cada expediente de forma inmediata a medida que llegan a la RAM.
         """
-        logger.info(f"🔮 [CHASKYWASI-TRIGGER] Iniciando ciclo de vida para Expediente Global: {global_id}")
+        logger.info(f"🔮 [CHASKYWASI-TRIGGER] Iniciando ciclo de vida streaming para lote: {global_id}")
         
         # Inicializamos el motor de descubrimiento dinámico de chaskitambo
         tambo_engine = ChaskitamboEngine()
         
-        # Diccionario interno para acumular los bytes recolectados por los productores paralelos
-        # Estructura requerida por ChaskyConsolidator: {"nombre_fuente": bytes}
-        collected_sources = {}
+        # Cargamos las configuraciones de red globales de quipu (.env) de una sola vez
+        settings_quipu = QuipuSettings() if _QUIPU_AVAILABLE else None
+        
+        # Contador interno para el control del stream en consola
+        total_procesados_stream = 0
 
         # ----------------------------------------------------------------------
-        # HANDLER SECUENCIAL: Este es el callback que ejecutará el consumidor de la cola
+        # HANDLER SECUENCIAL EN CALIENTE (PROCESA Y TRANSMITE EN TIEMPO REAL)
         # ----------------------------------------------------------------------
         async def chaskywasi_sequential_handler(doc: ChaskiDocument):
-            logger.info(f"📥 [TRIGGER-HANDLER] Capturado flujo en RAM para ID Externo: {doc.id_externo} | Fuente: {doc.fuente}")
+            nonlocal total_procesados_stream
+            logger.info(f"📥 [STREAM-HANDLER] Capturado remate en RAM -> ID: {doc.id_externo} | Fuente: {doc.fuente}")
             
             if not doc.pdf_bytes:
-                logger.warning(f"⚠️ El documento {doc.id_externo} no contiene bytes de PDF válidos. Saltando persistencia RAG.")
+                logger.warning(f"⚠️ El documento {doc.id_externo} no contiene bytes de PDF válidos. Saltando.")
                 return
 
-            # Almacenamos el flujo binario usando una clave compuesta o la fuente directa
-            key_identificador = f"{doc.fuente}_{doc.id_externo}"
-            collected_sources[key_identificador] = doc.pdf_bytes
+            total_procesados_stream += 1
             
-            # [OPCIONAL] Si quisieras insertar fragmentos directamente en ChromaDB en tiempo real 
-            # línea por línea sin esperar al consolidador final, podrías mapear aquí tu ChromaPersistentManager.
+            # Estructura requerida por tu ChaskyConsolidator: {"identificador": bytes}
+            id_tarjeta_individual = f"{doc.fuente}_{doc.id_externo}"
+            payload_ram_individual = {id_tarjeta_individual: doc.pdf_bytes}
+            
+            # Definimos la ruta física individual del reporte Markdown para auditoría local
+            reporte_individual_path = self.output_dir / f"master_{global_id}_{doc.id_externo}.json"
+
+            try:
+                # 1. Fase Semántica: Fragmentamos con Docling de forma inmediata
+                logger.info(f"⚙️ [STREAM-RAG] Fragmentando estructuralmente con Docling el expediente: {doc.id_externo}")
+                await asyncio.to_thread(
+                    self.consolidator.build_master_expediente,
+                    global_id=global_id,
+                    data_sources=payload_ram_individual,
+                    output_json_path=reporte_individual_path
+                )
+                logger.info(f"✨ [OK] Reporte estructural intermedio guardado en: {reporte_individual_path}")
+
+                # 2. Fase de Red: Despachamos el pipeline de quipu hacia la nube y NestJS
+                if _QUIPU_AVAILABLE and settings_quipu:
+                    logger.info(f"🚚 [STREAM-QUIPU] Transmitiendo DTO a NestJS para expediente: {doc.id_externo}")
+                    
+                    mapa_fuente_virtual = {doc.fuente: f"memory://{doc.fuente}/{doc.id_externo}.pdf"}
+                    
+                    # CORREGIDO: Inyectamos el DTO real extraído de la ficha en el parámetro raw_data
+                    pipeline_success = await procesar_expediente_completo(
+                        global_id=doc.id_externo,
+                        pdf_bytes=doc.pdf_bytes,
+                        sources_paths=mapa_fuente_virtual,
+                        raw_data=doc.metadatos.get("detalle", {}),  # <-- LLAVE CLAVE: Enviamos los datos reales capturados en RAM
+                        settings=settings_quipu
+                    )
+                    
+                    if pipeline_success:
+                        logger.info(f"🎉 [STREAM-OK] Sincronización exitosa en NestJS para: {doc.id_externo}")
+                    else:
+                        logger.error(f"❌ El pipeline de quipu reportó fallos de transmisión para: {doc.id_externo}")
+                else:
+                    logger.warning(f"⚠️ Omitiendo despacho de red para {doc.id_externo}. Quipu no inicializado.")
+                        
+            except Exception:
+                logger.exception(f"❌ Error crítico en el flujo streaming individual para la tarjeta {doc.id_externo}")
 
         # ----------------------------------------------------------------------
         # DISPARO CONCURRENTE HACIA EL MOTOR EXTERNO
         # ----------------------------------------------------------------------
-        logger.info(f"🚀 [TRIGGER] Despertando motores paralelos de chaskitambo para: {plugin_names}")
+        logger.info(f"🚀 [TRIGGER] Activando motores paralelos de chaskitambo para: {plugin_names}")
         try:
-            # Forzamos la política de bucle proactor si estamos en Windows antes de lanzar Playwright de forma interna
-            if sys.platform == "win32":
-                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
-            # Invocamos el motor paralelo con salida secuencial que auditamos previamente
+            # Invocamos la ejecución concurrente hacia chaskitambo
             await tambo_engine.run_plugins_parallel(
                 plugin_names=plugin_names,
                 chaskywasi_handler=chaskywasi_sequential_handler
             )
             
-        except Exception:
-            logger.exception("❌ Error crítico durante la recolección paralela de datos de chaskitambo")
-            return
-
-        # ----------------------------------------------------------------------
-        # CONSOLIDACIÓN Y CLASIFICACIÓN RAG (DOCLING + CASCADE)
-        # ----------------------------------------------------------------------
-        if not collected_sources:
-            logger.error("❌ No se logró recolectar ningún documento binario. Abortando consolidación.")
-            return
-
-        logger.info(f"⚙️ [TRIGGER] Iniciando Ingesta y Segmentación RAG para {len(collected_sources)} fuentes capturadas...")
-        
-        target_json_report = self.output_dir / f"master_{global_id}.json"
-        
-        try:
-            # Ejecutamos de forma síncrona/bloqueante controlada el pipeline agnóstico de chaskywasi
-            # pasando los archivos binarios directamente extraídos de la RAM
-            await asyncio.to_thread(
-                self.consolidator.build_master_expediente,
-                global_id=global_id,
-                data_sources=collected_sources,
-                output_json_path=target_json_report
-            )
-            logger.info(f"✨ [OK] Pipeline completado de punta a punta. Reporte Maestro en: {target_json_report}")
+            if total_procesados_stream > 0:
+                logger.info(f"✨ [TRIGGER] Orquestación por streaming finalizada. Total expedientes procesados: {total_procesados_stream}")
+            else:
+                logger.info("✨ [TRIGGER] Toda la bandeja web estaba al día. No se detectaron expedientes nuevos para transmitir.")
             
         except Exception:
-            logger.exception("❌ Falló la fase de consolidación y fragmentación RAG en el Consolidador")
+            logger.exception("❌ Error crítico durante la ejecución paralela de la suite")
