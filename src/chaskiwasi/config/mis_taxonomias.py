@@ -1,4 +1,5 @@
-# Un archivo cualquiera en tu suite, por ejemplo: D:\libs\config_suite\mis_taxonomias.py
+# Un archivo cualquiera en tu suite
+# D:\libs\chaskywasi\src\chaskiwasi\config\mis_taxonomias.py
 from enum import Enum
 
 class SourceEnum(Enum):

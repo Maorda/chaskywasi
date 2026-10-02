@@ -29,7 +29,9 @@ dependencies = [
     "requests>=2.32.0",
     "streamlit>=1.30.0",
     "google-genai>=0.1.0",
-    "httpx>=0.27.0"
+    "httpx>=0.27.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0"
 ]
 
 [project.optional-dependencies]
@@ -50,5 +52,8 @@ packages = ["src/chaskiwasi"]
 # REEMPLAZA EL BLOQUE ANTERIOR POR ESTE CON LA RUTA INTERNA REAL:
 [project.entry-points."chaskywasi.taxonomy"]
 taxonomia_oficial = "chaskiwasi.config.mis_taxonomias:cargar_taxonomia_peru"
+
+[project.scripts]
+chaskiwasi = "chaskiwasi.cli:app"
 
 
