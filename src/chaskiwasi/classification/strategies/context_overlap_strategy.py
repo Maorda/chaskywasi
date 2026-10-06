@@ -1,21 +1,28 @@
-# dantesito/chasky/classification/strategies/context_overlap_strategy.py
+"""Estrategia de continuidad contextual."""
 
-from typing import Optional, Tuple
+from __future__ import annotations
 
-from chaskiwasi.classification.strategies.base_strategy import BaseStrategy
-from chaskiwasi.config.taxonomy_registry import SectionEnum, SourceEnum
+from chaskiwasi.classification.strategies.base_strategy import (
+    BaseStrategy,
+    ClassificationContext,
+    ClassificationResult,
+)
 
 
 class ContextOverlapStrategy(BaseStrategy):
-    """Arrastra la fuente institucional desde el contexto del chunk anterior."""
+    """Conserva la clasificación anterior cuando el plugin no detecta una nueva."""
 
-    def classify(
-        self,
-        chunk_text: str,
-        current_source: Optional[SourceEnum] = None,
-    ) -> Tuple[Optional[SourceEnum], Optional[SectionEnum]]:
-        """Mantiene la fuente previa sin inspeccionar el contenido del chunk."""
-        if current_source is not None:
-            return current_source, None
+    def classify(self, chunk: str, context: ClassificationContext) -> ClassificationResult:
+        if context.current_source is None and context.current_section is None:
+            return ClassificationResult.no_match("sin contexto previo")
 
-        return None, None
+        if context.current_section is None:
+            # Una fuente sola no constituye una clasificación de sección.
+            return ClassificationResult.no_match("solo existe contexto de fuente")
+
+        return ClassificationResult(
+            source=context.current_source,
+            section=context.current_section,
+            matched=True,
+            reason="contexto_anterior",
+        )

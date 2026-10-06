@@ -1,42 +1,46 @@
-# tests/conftest.py
-import os
-import pytest
 import enum
-from chaskiwasi.config.taxonomy_registry import TaxonomyRegistry
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 
-# 1. Definimos Enums falsos mínimos para que los tests pasen
 class MockSourceEnum(enum.Enum):
-    SUNARP = "SUNARP"
-    REMAJU = "REMAJU"
+    REMAJU = "remaju"
+    SUNARP = "sunarp"
+
 
 class MockSectionEnum(enum.Enum):
-    ENCABEZADO = "ENCABEZADO"
-    RESOLUCION = "RESOLUCION"
-    PARTES = "PARTES"
-    GRAVAMEN = "GRAVAMEN"
-
-# 2. Inyectamos las taxonomías globales ANTES de que los tests importen las clases reales
-TaxonomyRegistry.inject_taxonomies(MockSourceEnum, MockSectionEnum)
+    ENCABEZADO = "encabezado"
+    RESOLUCION = "resolucion"
+    PARTES = "partes"
+    GRAVAMEN = "gravamen"
 
 
-@pytest.fixture(autouse=True)
-def mock_mandatory_environment_variables(monkeypatch):
-    """
-    Fixture global automático que intercepta cada test del repositorio inyectando 
-    las credenciales obligatorias de QuipuSettings y GoogleDrivePublisher,
-    blindando el aislamiento de RAM y red en la PC de la oficina.
-    """
-    # Clave privada dummy estructurada en formato PEM legítimo para engañar a la librería de criptografía de Google
-    mock_pem_key = (
-        "-----BEGIN RSA PRIVATE KEY-----\n"
-        "MIIEowIBAAKCAQEA0Xo/yC1V6D4k...\n"
-        "-----END RSA PRIVATE KEY-----\n"
-    )
-    
-    monkeypatch.setenv("NESTJS_API_URL", "http://localhost:3000/api")
-    monkeypatch.setenv("GOOGLE_DRIVE_FOLDER_ID", "mock_folder_id_123")
-    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyMockKey_Global_777")
-    monkeypatch.setenv("GOOGLE_CLIENT_EMAIL", "mock-service-account@://gserviceaccount.com")
-    monkeypatch.setenv("GOOGLE_PRIVATE_KEY", mock_pem_key)
-    monkeypatch.setenv("QUIPU_API_AUTH_TOKEN", "TokenSecretoTest123")
+@pytest.fixture
+def mock_source_enum():
+    return MockSourceEnum
+
+
+@pytest.fixture
+def mock_section_enum():
+    return MockSectionEnum
+
+
+@pytest.fixture
+def mock_taxonomy():
+    from chaskiwasi.config.taxonomy_registry import Taxonomy
+
+    return Taxonomy("test", MockSourceEnum, MockSectionEnum)
+
+
+@pytest.fixture
+def plugin_context(mock_taxonomy):
+    from chaskiwasi.plugins.contracts import PluginContext
+
+    return PluginContext(name="test", taxonomy=mock_taxonomy)

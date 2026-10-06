@@ -1,133 +1,93 @@
-# dantesito/chasky/cli.py
+"""CLI del motor Chaskiwasi, sin dependencias sobre orquestadores externos."""
 
+from __future__ import annotations
+
+import argparse
 import asyncio
-import sys
-import typer
-import importlib.metadata  # <-- AGREGADO para leer los entry points
-from dotenv import load_dotenv  
+from pathlib import Path
+
 from rich import print
 from rich.table import Table
 
-# Cargar variables de entorno
-load_dotenv()  
-
-from chaskiwasi.orchestration.trigger import ChaskywasiTrigger
-from chaskiwasi.classification.cascade_factory import CascadeFactory
-from chaskiwasi.classification.strategies.context_overlap_strategy import ContextOverlapStrategy
-
-app = typer.Typer(
-    help="Casa del Mensajero - Centro de Control Estratégico RAG y Almacenamiento Vectorial.",
-    add_completion=False
-)
-
-# Subgrupos de comandos profesionales
-ingesta_app = typer.Typer(help="Comandos para disparar y controlar la ingesta de legajos.")
-vector_app = typer.Typer(help="Comandos para auditar y mantener la base de datos ChromaDB.")
-app.add_typer(ingesta_app, name="ingesta")
-app.add_typer(vector_app, name="vector")
+from chaskiwasi.config.settings import settings
+from chaskiwasi.orchestration.trigger import ChaskiwasiTrigger
+from chaskiwasi.plugins.registry import PluginRegistry
 
 
-# ==============================================================================
-# COMANDOS PRINCIPALES
-# ==============================================================================
+def listar_plugins() -> None:
+    """Lista los plugins Chaskiwasi instalados."""
+    plugins = PluginRegistry.all()
+    if not plugins:
+        print("[yellow]No se detectaron plugins Chaskiwasi.[/yellow]")
+        return
 
-# ==============================================================================
-# COMANDOS PRINCIPALES
-# ==============================================================================
+    table = Table(title="Plugins Chaskiwasi")
+    table.add_column("Plugin")
+    table.add_column("Taxonomía")
+    table.add_column("Extractor")
+    table.add_column("Reglas")
 
-@app.command("list")
-def listar_plugins():
-    """
-    Lista todos los plugins instalados dinámicamente en el ecosistema Chaskiwasi.
-    """
-    print("[bold cyan]🔌 Escaneando red de Chasquis (plugins instalados)...[/bold cyan]\n")
-    
-    table = Table(title="Plugins Detectados en el Ecosistema")
-    table.add_column("Categoría (Entry Point)", style="cyan", no_wrap=True)
-    table.add_column("Nombre del Plugin", style="magenta", justify="left")
-    table.add_column("Versión", style="yellow", justify="center") # <-- COLUMNA AÑADIDA
-    table.add_column("Módulo Destino", style="green", justify="left")
-    
-    # Grupos definidos en tu arquitectura (pyproject.toml)
-    target_groups = ["chaskiwasi.query_rules", "chaskiwasi.classifiers", "chaskiwasi.extractors"]
-    
-    eps = importlib.metadata.entry_points()
-    plugins_encontrados = False
-    
-    for group in target_groups:
-        group_eps = eps.select(group=group)
-        for ep in group_eps:
-            plugins_encontrados = True
-            
-            # Obtener la versión del paquete (Distribution) que provee el plugin
-            version = "Desconocida"
-            if hasattr(ep, 'dist') and ep.dist is not None:
-                version = ep.dist.version
-                
-            table.add_row(group, ep.name, version, ep.value)
-            
-    if plugins_encontrados:
-        print(table)
-        print("\n[dim]Nota: Estos plugins son inyectados automáticamente en el motor base.[/dim]")
-    else:
-        print("[bold yellow]⚠️ No se detectaron plugins instalados para Chaskiwasi.[/bold yellow]")
-        print("Asegúrate de instalar los plugins (ej. 'pip install -e /ruta/chaskiwasi-legal-pe').")
-
-
-# ==============================================================================
-# COMANDOS DE INGESTA
-# ==============================================================================
-
-@ingesta_app.command("tambo")
-def disparar_tambo(
-    plugins: list[str] = typer.Argument(..., help="Lista de plugins a ejecutar en paralelo (ej. remaju)")
-):
-    """
-    Gatilla la extracción paralela en Chaskitambo y consolida los reportes en Chaskiwasi.
-    """
-    print("[bold cyan]wasi 🏛️  -> Ordenando salida de Chasquis hacia los paraderos...[/bold cyan]\n")
-    
-    # 1. Inicializamos la fábrica en cascada con tu estrategia contextual real
-    estrategia_contexto = ContextOverlapStrategy()
-    cascade_factory = CascadeFactory(strategies=[estrategia_contexto])
-    
-    # 2. Instanciamos tu clase real 'ChaskywasiTrigger' inyectándole la fábrica
-    orchestrator = ChaskywasiTrigger(cascade_factory=cascade_factory)
-    
-    # 3. Forzar política de bucle Proactor requerida por Playwright en Windows
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        
-    try:
-        # Ejecutamos el pipeline asíncronamente con un ID de lote de prueba
-        asyncio.run(orchestrator.orchestrate_extraction_and_rag(
-            global_id="LOTE-TEST-01", 
-            plugin_names=plugins
-        ))
-    except KeyboardInterrupt:
-        print("\n[bold yellow]⚠️ Operación cancelada por el operador central.[/bold yellow]")
-    except Exception as e:
-        print(f"\n[bold red]❌ Error crítico en el pipeline: {e}[/bold red]")
-
-
-# ==============================================================================
-# COMANDOS VECTORIALES (MOCK)
-# ==============================================================================
-
-@vector_app.command("status")
-def ver_estado_vectores():
-    """
-    Muestra un reporte analítico de las colecciones y chunks en ChromaDB.
-    """
-    print("[bold green]📊 Analizando estado de la memoria persistente (ChromaDB)...[/bold green]\n")
-    
-    table = Table(title="Colecciones Activas en Chaskiwasi")
-    table.add_column("Colección", justify="left", style="cyan", no_wrap=True)
-    table.add_column("Total Chunks", justify="right", style="magenta")
-    
-    table.add_row("expedientes_remaju", "0 (Pendiente indexación)", "384")
+    for name, plugin in sorted(plugins.items()):
+        table.add_row(
+            name,
+            plugin.taxonomy.name,
+            "sí" if plugin.extractor else "no",
+            "sí" if plugin.query_rules_factory else "no",
+        )
     print(table)
 
 
+def procesar_pdf(pdf_path: Path, plugin: str, lote_id: str | None) -> None:
+    """Procesa un PDF mediante un plugin y guarda el JSON resultante."""
+    execution_id = lote_id or f"PDF-{pdf_path.stem}"
+    print(f"[cyan]Chaskiwasi -> {pdf_path}[/cyan]")
+    print(f"[dim]Plugin: {plugin} | ID: {execution_id}[/dim]")
+    asyncio.run(
+        ChaskiwasiTrigger().process_file(
+            global_id=execution_id,
+            plugin_name=plugin,
+            file_path=pdf_path,
+        )
+    )
+    print("[green]Procesamiento completado.[/green]")
+
+
+def ver_estado_vectores() -> None:
+    print(f"[cyan]Persistencia ChromaDB:[/cyan] {settings.CHROMA_PERSISTENT_PATH}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Motor documental y RAG de Chaskiwasi.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    list_parser = subparsers.add_parser("list", help="Lista los plugins instalados.")
+    list_parser.set_defaults(handler=lambda args: listar_plugins())
+
+    ingesta = subparsers.add_parser("ingesta", help="Procesamiento documental.")
+    ingesta_sub = ingesta.add_subparsers(dest="ingesta_command", required=True)
+    pdf = ingesta_sub.add_parser("pdf", help="Procesa un PDF mediante un plugin.")
+    pdf.add_argument("pdf_path", type=Path)
+    pdf.add_argument("--plugin", "-p", required=True)
+    pdf.add_argument("--lote", "-l", default=None)
+    pdf.set_defaults(handler=lambda args: procesar_pdf(args.pdf_path, args.plugin, args.lote))
+
+    vector = subparsers.add_parser("vector", help="Operaciones de almacenamiento vectorial.")
+    vector_sub = vector.add_subparsers(dest="vector_command", required=True)
+    status = vector_sub.add_parser("status", help="Muestra la ruta de persistencia.")
+    status.set_defaults(handler=lambda args: ver_estado_vectores())
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    try:
+        args.handler(args)
+    except Exception as exc:
+        print(f"[red]Error: {exc}[/red]")
+        raise SystemExit(1) from exc
+
+
+app = main
+
 if __name__ == "__main__":
-    app()
+    main()

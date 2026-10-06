@@ -1,43 +1,51 @@
-# dantesito/chasky/classification/strategies/base_strategy.py
-from abc import ABC, abstractmethod
-from typing import Tuple, Optional, Any
+"""Contrato base para estrategias de clasificación."""
 
-# 🚀 CONTRATO ACTIVO: Importación obligatoria para control de tipos dinámicos
-from chaskiwasi.config.taxonomy_registry import TaxonomyRegistry
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Optional
+
+from chaskiwasi.config.taxonomy_registry import Taxonomy
+from chaskiwasi.plugins.contracts import PluginContext
+
+
+@dataclass(frozen=True)
+class ClassificationContext:
+    """Contexto controlado que el core entrega a cada estrategia."""
+
+    plugin: PluginContext
+    current_source: Optional[Any] = None
+    current_section: Optional[Any] = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def taxonomy(self) -> Taxonomy:
+        return self.plugin.taxonomy
+
+
+@dataclass(frozen=True)
+class ClassificationResult:
+    """Resultado normalizado de una estrategia."""
+
+    source: Optional[Any] = None
+    section: Optional[Any] = None
+    matched: bool = False
+    reason: Optional[str] = None
+
+    @classmethod
+    def no_match(cls, reason: Optional[str] = None) -> "ClassificationResult":
+        return cls(reason=reason)
 
 
 class BaseStrategy(ABC):
-    """
-    Interfaz contractual agnóstica para todas las estrategias de inferencia semántica.
-    
-    Expone de forma segura las clases de Enums inyectadas por el cliente mediante
-    propiedades dinámicas de solo lectura, eliminando la fragilidad de constructores.
-    """
-
-    @property
-    def source_enum_class(self) -> Any:
-        """
-        Devuelve de forma dinámica la clase SourceEnum del cliente.
-        🛡️ CORTAFUEGOS EN CALIENTE: Lanza RuntimeError si no fue inyectada al arrancar.
-        """
-        return TaxonomyRegistry.get_source_enum()
-
-    @property
-    def section_enum_class(self) -> Any:
-        """
-        Devuelve de forma dinámica la clase SectionEnum del cliente.
-        🛡️ CORTAFUEGOS EN CALIENTE: Lanza RuntimeError si no fue inyectada al arrancar.
-        """
-        return TaxonomyRegistry.get_section_enum()
+    """Interfaz única para todas las estrategias del motor."""
 
     @abstractmethod
-    def classify(self, chunk: str, current_source: Optional[str] = None) -> Tuple[Optional[Any], Optional[Any]]:
-        """
-        Analiza un fragmento y devuelve una tupla conteniendo las instancias
-        de los Enums dinámicos del cliente (SourceEnum, SectionEnum).
-
-        :param chunk: Fragmento de texto Markdown a evaluar.
-        :param current_source: Contexto de origen acumulado o arrastrado.
-        :return: Tupla conteniendo (Instancia de SourceEnum, Instancia de SectionEnum)
-        """
-        pass
+    def classify(
+        self,
+        chunk: str,
+        context: ClassificationContext,
+    ) -> ClassificationResult:
+        """Clasifica un chunk usando únicamente el contexto recibido."""
+        raise NotImplementedError

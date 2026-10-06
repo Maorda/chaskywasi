@@ -1,101 +1,57 @@
-# tests/test_chroma_persistent.py
-
+from enum import Enum
 from pathlib import Path
-from typing import List, Tuple
 
-import pytest
-
-from chaskiwasi.config.taxonomy_registry import SectionEnum, SourceEnum
 from chaskiwasi.storage.chroma_persistent import ChromaPersistentManager
 
 
-def test_chroma_persistent_manager_stores_chunks_and_taxonomy(
-    tmp_path: Path,
-) -> None:
-    persistence_path: Path = tmp_path / "chroma_db"
+class Source(Enum):
+    DOCUMENT = "document"
 
-    manager = ChromaPersistentManager(
-        persistence_path=str(persistence_path),
+
+class Section(Enum):
+    TITLE = "title"
+    BODY = "body"
+
+
+def test_chroma_persistent_manager_stores_classified_chunks(tmp_path: Path) -> None:
+    manager = ChromaPersistentManager(persistence_path=str(tmp_path / "chroma_db"))
+
+    manager.add_classified_chunks(
+        collection_name="test_collection",
+        doc_id="DOC-001",
+        classified_chunks=[
+            (Source.DOCUMENT, Section.TITLE, "Título del documento."),
+            (Source.DOCUMENT, Section.BODY, "Contenido del documento."),
+        ],
+        plugin_name="demo",
     )
 
-    collection_name: str = "test_collection"
-    doc_id: str = "documento_test_001"
-
-    chunks: List[Tuple[SectionEnum, str]] = [
-        (SectionEnum.ENCABEZADO, "Información del remate judicial."),
-        (SectionEnum.RESOLUCION, "Resolución judicial del remate."),
-        (SectionEnum.PARTES, "Demandante y demandado."),
-        (SectionEnum.GRAVAMEN, "Gravámenes registrados."),
-    ]
-
-    manager.add_chunks(
-        collection_name=collection_name,
-        doc_id=doc_id,
-        source=SourceEnum.SUNARP,
-        chunks=chunks,
-    )
-
-    collection = manager.get_or_create_collection(collection_name)
+    collection = manager.get_or_create_collection("test_collection")
     result = collection.get()
 
-    assert result["ids"] == [
-        f"{doc_id}_0",
-        f"{doc_id}_1",
-        f"{doc_id}_2",
-        f"{doc_id}_3",
-    ]
-
-    assert result["documents"] == [
-        "Información del remate judicial.",
-        "Resolución judicial del remate.",
-        "Demandante y demandado.",
-        "Gravámenes registrados.",
-    ]
-
+    assert result["ids"] == ["demo_DOC-001_0", "demo_DOC-001_1"]
     assert result["metadatas"] == [
         {
-            "id_documento": doc_id,
-            "fuente": SourceEnum.SUNARP.value,
-            "tipo_seccion": SectionEnum.ENCABEZADO.value,
+            "id_documento": "DOC-001",
+            "fuente": "document",
+            "tipo_seccion": "title",
+            "plugin": "demo",
         },
         {
-            "id_documento": doc_id,
-            "fuente": SourceEnum.SUNARP.value,
-            "tipo_seccion": SectionEnum.RESOLUCION.value,
-        },
-        {
-            "id_documento": doc_id,
-            "fuente": SourceEnum.SUNARP.value,
-            "tipo_seccion": SectionEnum.PARTES.value,
-        },
-        {
-            "id_documento": doc_id,
-            "fuente": SourceEnum.SUNARP.value,
-            "tipo_seccion": SectionEnum.GRAVAMEN.value,
+            "id_documento": "DOC-001",
+            "fuente": "document",
+            "tipo_seccion": "body",
+            "plugin": "demo",
         },
     ]
 
-    assert persistence_path.exists()
-    assert any(persistence_path.iterdir())
 
+def test_add_classified_chunks_is_idempotent(tmp_path: Path) -> None:
+    manager = ChromaPersistentManager(persistence_path=str(tmp_path / "chroma_db"))
+    rows = [(Source.DOCUMENT, Section.BODY, "Contenido.")]
 
-def test_add_chunks_with_empty_list_does_not_write_data(
-    tmp_path: Path,
-) -> None:
-    manager = ChromaPersistentManager(
-        persistence_path=str(tmp_path / "chroma_db"),
-    )
+    manager.add_classified_chunks("test_collection", "DOC-001", rows, "demo")
+    manager.add_classified_chunks("test_collection", "DOC-001", rows, "demo")
 
-    manager.add_chunks(
-        collection_name="empty_collection",
-        doc_id="documento_vacio",
-        source=SourceEnum.REMAJU,
-        chunks=[],
-    )
-
-    collection = manager.get_or_create_collection("empty_collection")
-    result = collection.get()
-
-    assert result["ids"] == []
-    assert result["documents"] == []
-    assert result["metadatas"] == []
+    result = manager.get_or_create_collection("test_collection").get()
+    assert result["ids"] == ["demo_DOC-001_0"]

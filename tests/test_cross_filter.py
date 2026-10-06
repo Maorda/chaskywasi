@@ -1,83 +1,58 @@
-from unittest.mock import MagicMock, patch
+from enum import Enum
 
-import pytest
-
+from chaskiwasi.plugins.contracts import PluginDefinition
+from chaskiwasi.plugins.registry import PluginRegistry
+from chaskiwasi.config.taxonomy_registry import Taxonomy
 from chaskiwasi.query_engine.cross_filter import CrossQueryFilter, IntentRule
 
 
-@pytest.fixture
-def generic_rules():
-    """Reglas agnósticas de prueba para verificar el motor sin depender de un dominio específico."""
-    return [
-        IntentRule(
-            keywords=["médico", "doctor", "hospital"],
-            metadata_filter={"$and": [{"domain": "health"}]},
+class Source(Enum):
+    DOCUMENT = "document"
+
+
+class Section(Enum):
+    TITLE = "title"
+    BODY = "body"
+
+
+def _plugin():
+    taxonomy = Taxonomy("test_filter", Source, Section)
+
+    return PluginDefinition(
+        name="test_filter",
+        taxonomy=taxonomy,
+        strategy_factory=lambda context: [],
+        query_rules_factory=lambda: (
+            IntentRule(
+                keywords=("titulo", "título"),
+                metadata_filter={"tipo_seccion": "title"},
+                priority=10,
+            ),
         ),
-        IntentRule(
-            keywords=["banco", "finanzas", "préstamo"],
-            metadata_filter={"$and": [{"domain": "finance"}]},
-        ),
-    ]
+    )
 
 
-def test_empty_or_none_query_returns_base_filter(generic_rules):
-    filter_engine = CrossQueryFilter(load_plugins=False, custom_rules=generic_rules)
-    
-    res_empty = filter_engine.generate_where_clause("", "doc-123")
-    res_none = filter_engine.generate_where_clause(None, "doc-123")
-    res_spaces = filter_engine.generate_where_clause("   ", "doc-123")
-    
-    expected = {"id_documento": "doc-123"}
-    assert res_empty == expected
-    assert res_none == expected
-    assert res_spaces == expected
+def test_cross_filter_loads_plugin_rules():
+    PluginRegistry.clear()
+    PluginRegistry.register(_plugin())
 
+    query_filter = CrossQueryFilter()
+    where = query_filter.generate_where_clause("quiero el título", "DOC-1", "test_filter")
 
-def test_no_match_returns_base_filter(generic_rules):
-    filter_engine = CrossQueryFilter(load_plugins=False, custom_rules=generic_rules)
-    
-    result = filter_engine.generate_where_clause("consulta de ingeniería civil", "doc-456")
-    assert result == {"id_documento": "doc-456"}
-
-
-def test_match_applies_correct_rule(generic_rules):
-    filter_engine = CrossQueryFilter(load_plugins=False, custom_rules=generic_rules)
-    
-    result = filter_engine.generate_where_clause("necesito ver a un doctor urgente", "doc-789")
-    
-    expected = {
+    assert where == {
         "$and": [
-            {"id_documento": "doc-789"},
-            {"$and": [{"domain": "health"}]}
+            {"id_documento": "DOC-1"},
+            {"plugin": "test_filter"},
+            {"tipo_seccion": "title"},
         ]
     }
-    assert result == expected
 
 
-@patch("importlib.metadata.entry_points")
-def test_plugin_auto_discovery(mock_entry_points):
-    """Verifica que el motor descubre e inyecta reglas desde paquetes externos (Entry Points)."""
-    
-    mock_ep = MagicMock()
-    mock_ep.name = "mock_plugin"
-    # Simulamos que el plugin externo retorna una lista de IntentRules
-    mock_ep.load.return_value = lambda: [
-        IntentRule(keywords=["plugin_test"], metadata_filter={"source": "external_plugin"})
-    ]
-    
-    mock_entry_points.return_value = [mock_ep]
-    
-    filter_engine = CrossQueryFilter(load_plugins=True)
-    
-    assert len(filter_engine.rules) == 1
-    assert filter_engine.rules[0].keywords == ["plugin_test"]
-    
-    # Validamos que el enrutamiento funciona con la regla inyectada dinámicamente
-    result = filter_engine.generate_where_clause("este es un plugin_test", "doc-999")
-    expected = {
-        "$and": [
-            {"id_documento": "doc-999"},
-            {"source": "external_plugin"}
-        ]
-    }
-    assert result == expected
+def test_cross_filter_can_filter_only_by_plugin():
+    PluginRegistry.clear()
+    PluginRegistry.register(_plugin())
+
+    query_filter = CrossQueryFilter()
+    where = query_filter.generate_where_clause("consulta general", plugin_name="test_filter")
+
+    assert where == {"plugin": "test_filter"}

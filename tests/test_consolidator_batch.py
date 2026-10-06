@@ -1,73 +1,99 @@
+from enum import Enum
 from unittest.mock import MagicMock
-import pytest
 
 from chaskiwasi.classification.cascade_factory import CascadeFactory
+from chaskiwasi.config.taxonomy_registry import Taxonomy
+from chaskiwasi.plugins.contracts import PluginContext
 
 
-@pytest.fixture
-def mock_strategies():
-    """Estrategias simuladas para verificar la ejecución en lote y propagación de estado."""
+class Source(Enum):
+    REMAJU = "remaju"
+    SUNARP = "sunarp"
+
+
+class Section(Enum):
+    ENCABEZADO = "encabezado"
+    PARTES = "partes"
+    RESOLUCION = "resolucion"
+
+
+def make_factory():
+    taxonomy = Taxonomy("batch_test", Source, Section)
+    context = PluginContext("batch_test", taxonomy)
+
     strat1 = MagicMock()
     strat2 = MagicMock()
-
-    # Chunk 0: strat1 detecta SUNARP, ENCABEZADO
-    # Chunk 1: strat1 no detecta nada, strat2 detecta PARTES
-    # Chunk 2: ninguna detecta nada -> cae al fallback por defecto
     strat1.classify.side_effect = [
-        ("SUNARP", "ENCABEZADO"),
+        (Source.SUNARP, Section.ENCABEZADO),
         (None, None),
         (None, None),
     ]
     strat2.classify.side_effect = [
-        (None, "PARTES"),
+        (None, Section.PARTES),
         (None, None),
     ]
 
-    return [strat1, strat2]
+    return CascadeFactory(
+        strategies=[strat1, strat2],
+        plugin_context=context,
+        default_source=Source.REMAJU,
+        default_section=Section.RESOLUCION,
+    ), strat1, strat2
 
 
-def test_process_chunks_batch_success_and_context_propagation(mock_strategies):
-    """Verifica que el procesamiento en lote ejecute secuencialmente y propague el contexto activo."""
-    factory = CascadeFactory(
-        strategies=mock_strategies,
-        default_source="DEFAULT_SRC",
-        default_section="DEFAULT_SEC",
+def test_process_chunks_batch_success_and_context_propagation():
+    factory, strat1, strat2 = make_factory()
+
+    results = factory.process_chunks_batch(
+        [
+            "Chunk 0: Encabezado registral SUNARP",
+            "Chunk 1: Cláusula de comprador y vendedor",
+            "Chunk 2: Texto sin coincidencia de reglas",
+        ],
+        current_source=Source.REMAJU,
     )
 
-    chunks = [
-        "Chunk 0: Encabezado registral SUNARP",
-        "Chunk 1: Cláusula de comprador y vendedor",
-        "Chunk 2: Texto sin coincidencia de reglas",
+    assert results == [
+        (Source.SUNARP, Section.ENCABEZADO),
+        (Source.SUNARP, Section.PARTES),
+        (Source.SUNARP, Section.PARTES),
     ]
+    assert strat1.classify.call_count == 3
+    assert strat2.classify.call_count == 2
 
-    results = factory.process_chunks_batch(chunks, current_source="INITIAL_SRC")
-
-    assert len(results) == 3
-    # Chunk 0: Clasificado explícitamente como SUNARP, ENCABEZADO
-    assert results[0] == ("SUNARP", "ENCABEZADO")
-    # Chunk 1: Mantiene SUNARP como contexto activo y clasifica PARTES
-    assert results[1] == ("SUNARP", "PARTES")
-    # Chunk 2: Ninguna estrategia clasifica, retorna el contexto activo acumulado y la sección por defecto
-    assert results[2] == ("SUNARP", "DEFAULT_SEC")
+    first_context = strat1.classify.call_args_list[0].args[1]
+    second_context = strat1.classify.call_args_list[1].args[1]
+    assert first_context.current_source is Source.REMAJU
+    assert first_context.current_section is Section.RESOLUCION
+    assert second_context.current_source is Source.SUNARP
+    assert second_context.current_section is Section.ENCABEZADO
 
 
 def test_process_chunks_batch_empty_list():
-    """Verifica que pasar una lista vacía retorne una lista vacía sin procesar estrategias."""
-    factory = CascadeFactory(default_source="SRC", default_section="SEC")
-    results = factory.process_chunks_batch([])
-    assert results == []
+    factory = CascadeFactory(
+        plugin_context=PluginContext("batch_test", Taxonomy("batch_test", Source, Section)),
+        default_source=Source.REMAJU,
+        default_section=Section.RESOLUCION,
+    )
+
+    assert factory.process_chunks_batch([]) == []
 
 
 def test_process_chunks_batch_with_blank_and_none_chunks():
-    """Verifica que cadenas vacías o None dentro del lote devuelvan los valores por defecto."""
     factory = CascadeFactory(
+        plugin_context=PluginContext("batch_test", Taxonomy("batch_test", Source, Section)),
         strategies=[],
-        default_source="REMAJU",
-        default_section="RESOLUCION",
+        default_source=Source.REMAJU,
+        default_section=Section.RESOLUCION,
     )
 
-    chunks = ["", "   ", None]
-    results = factory.process_chunks_batch(chunks, current_source="REMAJU")
+    results = factory.process_chunks_batch(
+        ["", "   ", None],
+        current_source=Source.REMAJU,
+    )
 
-    assert len(results) == 3
-    assert all(res == ("REMAJU", "RESOLUCION") for res in results)
+    assert results == [
+        (Source.REMAJU, Section.RESOLUCION),
+        (Source.REMAJU, Section.RESOLUCION),
+        (Source.REMAJU, Section.RESOLUCION),
+    ]

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -9,18 +9,17 @@ from chaskiwasi.consolidation.consolidator import ChaskyConsolidator
 
 @pytest.fixture
 def mock_cascade_factory():
-    """Simula el comportamiento de CascadeFactory."""
     factory = MagicMock()
     factory.process_chunks_batch.return_value = [
         ("SUNARP", "ENCABEZADO"),
         ("SUNARP", "PARTES"),
     ]
+    factory.plugin_context = None
     return factory
 
 
 @pytest.fixture
 def mock_converter():
-    """Simula el convertidor de Docling para evitar cargar modelos reales."""
     converter = MagicMock()
     doc_result = MagicMock()
     doc_result.document.export_to_markdown.return_value = (
@@ -31,135 +30,148 @@ def mock_converter():
 
 
 @pytest.fixture
-def consolidator(mock_cascade_factory, mock_converter):
-    """Instancia limpia de ChaskyConsolidator con dependencias simuladas."""
+def mock_rag_manager():
+    return MagicMock()
+
+
+@pytest.fixture
+def consolidator(mock_cascade_factory, mock_converter, mock_rag_manager):
     return ChaskyConsolidator(
         cascade_factory=mock_cascade_factory,
         converter=mock_converter,
+        rag_manager=mock_rag_manager,
     )
 
 
-# =====================================================================
-# 1. PRUEBAS DE INICIALIZACIÓN
-# =====================================================================
-
-def test_init_defaults():
-    """Verifica que se instancien las dependencias por defecto si no se inyectan."""
-    with patch("chaskiwasi.consolidation.consolidator.CascadeFactory") as mock_cf, patch(
-        "chaskiwasi.consolidation.consolidator.DocumentConverter"
-    ) as mock_dc:
+def test_init_keeps_cascade_factory_lazy():
+    with patch("chaskiwasi.consolidation.consolidator.DocumentConverter") as mock_dc, patch(
+        "chaskiwasi.consolidation.consolidator.ChunkTokenizer"
+    ) as mock_tokenizer, patch(
+        "chaskiwasi.consolidation.consolidator.ChromaPersistentManager"
+    ) as mock_rag:
         instance = ChaskyConsolidator()
-        assert instance._cascade_factory is not None
-        assert instance._converter is not None
+
+    assert instance._cascade_factory is None
+    assert instance._converter is mock_dc.return_value
+    assert instance._tokenizer is mock_tokenizer.return_value
+    assert instance._rag_manager is mock_rag.return_value
 
 
-# =====================================================================
-# 2. PRUEBAS DE EXTRACCIÓN DE PDF (DOCLING)
-# =====================================================================
-
-def test_extract_pdf_chunks_from_bytes(consolidator, mock_converter):
-    """Verifica la extracción de bloques Markdown desde bytes en RAM."""
+def test_extract_markdown_from_bytes(consolidator, mock_converter):
     pdf_bytes = b"%PDF-1.4 Fake PDF Content"
-    chunks = consolidator._extract_pdf_chunks(pdf_bytes)
 
-    assert len(chunks) == 2
-    assert chunks[0] == "# Encabezado Registral"
-    assert chunks[1] == "Texto de las partes involucradas."
+    markdown = consolidator._extract_markdown(pdf_bytes)
+
+    assert markdown == "# Encabezado Registral\n\nTexto de las partes involucradas."
     mock_converter.convert.assert_called_once()
 
 
-def test_extract_pdf_chunks_from_path(consolidator, mock_converter):
-    """Verifica la extracción desde un archivo en disco."""
-    chunks = consolidator._extract_pdf_chunks("documento.pdf")
+def test_extract_markdown_from_path_requires_existing_file(
+    consolidator, mock_converter, tmp_path: Path
+):
+    pdf_path = tmp_path / "documento.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 Fake PDF Content")
 
-    assert len(chunks) == 2
-    mock_converter.convert.assert_called_with("documento.pdf")
+    markdown = consolidator._extract_markdown(pdf_path)
+
+    assert markdown.startswith("# Encabezado Registral")
+    mock_converter.convert.assert_called_once_with(str(pdf_path))
 
 
-def test_extract_pdf_chunks_exception_returns_empty_list(consolidator, mock_converter):
-    """Verifica la resiliencia ante fallos del motor de conversión de Docling."""
+def test_extract_markdown_propagates_conversion_exception(consolidator, mock_converter):
     mock_converter.convert.side_effect = RuntimeError("Fallo al procesar PDF")
-    chunks = consolidator._extract_pdf_chunks("corrupto.pdf")
 
-    assert chunks == []
+    with pytest.raises(RuntimeError, match="Fallo al procesar PDF"):
+        consolidator._extract_markdown(b"%PDF-1.4 Fake PDF Content")
 
-
-# =====================================================================
-# 3. PRUEBAS DE INGESTIÓN JSON (IJSON)
-# =====================================================================
 
 @patch("ijson.items")
 def test_ingest_json_generic_from_bytes(mock_ijson_items, consolidator):
-    """Verifica el procesamiento de JSONs en bytes."""
     mock_ijson_items.return_value = iter([{"id": 1}, {"id": 2}])
-    json_bytes = b'[{"id": 1}, {"id": 2}]'
 
-    result = consolidator._ingest_json_generic(json_bytes)
+    result = consolidator._ingest_json_generic(b'[{"id": 1}, {"id": 2}]')
 
-    assert result["file"] == "stream_ram.json"
-    assert len(result["records"]) == 2
-    assert result["records"][0]["id"] == 1
+    assert result == {
+        "file": "stream_ram.json",
+        "records": [{"id": 1}, {"id": 2}],
+    }
 
 
 @patch("ijson.items")
-@patch("pathlib.Path.exists", return_value=True)
-@patch("builtins.open", new_callable=mock_open, read_data=b'[{"id": 10}]')
-def test_ingest_json_generic_from_file(mock_file, mock_exists, mock_ijson_items, consolidator):
-    """Verifica el procesamiento de JSONs en disco."""
+def test_ingest_json_generic_from_file(mock_ijson_items, consolidator, tmp_path: Path):
     mock_ijson_items.return_value = iter([{"id": 10}])
+    json_path = tmp_path / "datos.json"
+    json_path.write_bytes(b'[{"id": 10}]')
 
-    result = consolidator._ingest_json_generic("datos.json")
+    result = consolidator._ingest_json_generic(json_path)
 
-    assert result["file"] == "datos.json"
-    assert result["records"] == [{"id": 10}]
-
-
-def test_ingest_json_generic_file_not_found(consolidator):
-    """Verifica que un archivo inexistente retorne una estructura vacía sin lanzar excepción."""
-    result = consolidator._ingest_json_generic("archivo_inexistente.json")
-
-    assert result["file"] == "archivo_inexistente.json"
-    assert result["records"] == []
+    assert result == {"file": "datos.json", "records": [{"id": 10}]}
 
 
-# =====================================================================
-# 4. PRUEBAS DE ORQUESTACIÓN Y GENERACIÓN DEL REPORTE MAESTRO
-# =====================================================================
+def test_ingest_json_generic_file_not_found(consolidator, tmp_path: Path):
+    missing_path = tmp_path / "archivo_inexistente.json"
 
-def test_ingest_document_batch(consolidator, mock_cascade_factory):
-    """Verifica el procesamiento en lote y mapeo de secciones de un documento."""
-    result = consolidator._ingest_document_batch("expediente.pdf", "SUNARP")
+    with pytest.raises(FileNotFoundError, match="El archivo JSON no existe"):
+        consolidator._ingest_json_generic(missing_path)
+
+
+def test_ingest_document_batch(consolidator, mock_cascade_factory, tmp_path: Path):
+    pdf_path = tmp_path / "expediente.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 Fake PDF Content")
+
+    with patch.object(
+        consolidator._tokenizer,
+        "split_text",
+        return_value=["chunk 1", "chunk 2"],
+    ):
+        result = consolidator._ingest_document_batch(
+            pdf_path,
+            "SUNARP",
+            mock_cascade_factory,
+            None,
+            "EXP-001",
+        )
 
     assert result["file"] == "expediente.pdf"
     assert len(result["sections"]) == 2
     assert result["sections"][0]["source"] == "SUNARP"
     assert result["sections"][0]["section"] == "ENCABEZADO"
-    mock_cascade_factory.process_chunks_batch.assert_called_once()
+    mock_cascade_factory.process_chunks_batch.assert_called_once_with(
+        ["chunk 1", "chunk 2"],
+        current_source="SUNARP",
+    )
+    consolidator._rag_manager.add_classified_chunks.assert_called_once()
 
 
 @patch("ijson.items")
 def test_build_master_expediente_e2e(
-    mock_ijson_items, consolidator, mock_cascade_factory, tmp_path: Path
+    mock_ijson_items,
+    consolidator,
+    mock_cascade_factory,
+    tmp_path: Path,
 ):
-    """Verifica la construcción y persistencia completa del expediente maestro en disco."""
     mock_ijson_items.return_value = iter([{"record": 1}])
     output_file = tmp_path / "resultado_consolidado.json"
-
+    pdf_path = tmp_path / "sunarp_document.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 Fake PDF Content")
     data_sources = {
         "canal_json": b'[{"record": 1}]',
-        "canal_sunarp": "sunarp_document.pdf",
+        "canal_sunarp": pdf_path,
     }
 
-    consolidator.build_master_expediente(
-        global_id="EXP-2026-001",
-        data_sources=data_sources,
-        output_json_path=output_file,
-    )
+    with patch.object(
+        consolidator._tokenizer,
+        "split_text",
+        return_value=["chunk 1", "chunk 2"],
+    ):
+        consolidator.build_master_expediente(
+            global_id="EXP-2026-001",
+            data_sources=data_sources,
+            output_json_path=output_file,
+        )
 
     assert output_file.exists()
-
-    with open(output_file, "r", encoding="utf-8") as f:
-        master_data = json.load(f)
+    master_data = json.loads(output_file.read_text(encoding="utf-8"))
 
     assert master_data["global_id"] == "EXP-2026-001"
     assert master_data["metadatos_proceso"]["total_fuentes"] == 2

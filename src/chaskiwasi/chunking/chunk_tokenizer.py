@@ -1,43 +1,43 @@
-# dantesito/chasky/chunking/chunk_tokenizer.py
+"""Tokenización de Markdown estructural para el RAG de Chaskiwasi."""
+
+from __future__ import annotations
 
 from typing import List
 
 import tiktoken
 
-from chaskiwasi.config.settings import Settings
+from chaskiwasi.config.settings import settings
 
 
 class ChunkTokenizer:
-    """Divide textos en fragmentos mediante ventanas de tokens de tiktoken."""
+    """Divide Markdown estructural mediante ventanas de tokens con solapamiento."""
 
-    def __init__(self) -> None:
-        self._encoding = tiktoken.get_encoding(Settings.TIKTOKEN_ENCODING)
+    def __init__(self, encoding_name: str | None = None, chunk_size: int | None = None, overlap: int | None = None) -> None:
+        self._encoding = tiktoken.get_encoding(encoding_name or settings.TIKTOKEN_ENCODING)
+        self._chunk_size = settings.CHUNK_SIZE if chunk_size is None else chunk_size
+        self._overlap = settings.CHUNK_OVERLAP if overlap is None else overlap
+        if self._chunk_size <= 0:
+            raise ValueError("chunk_size debe ser mayor que cero.")
+        if self._overlap < 0 or self._overlap >= self._chunk_size:
+            raise ValueError("overlap debe ser >= 0 y menor que chunk_size.")
 
     def split_text(self, text: str) -> List[str]:
-        """Divide el texto en chunks determinados exclusivamente por tokens."""
-        if not isinstance(text, str) or not text:
+        if not isinstance(text, str) or not text.strip():
             return []
 
-        tokens: List[int] = self._encoding.encode(text)
-
+        tokens = self._encoding.encode(text)
         if not tokens:
             return []
 
-        chunk_size: int = Settings.CHUNK_SIZE
-        step: int = Settings.CHUNK_SIZE - Settings.CHUNK_OVERLAP
-
+        step = self._chunk_size - self._overlap
         chunks: List[str] = []
-        start: int = 0
-        total_tokens: int = len(tokens)
+        start = 0
 
-        while start < total_tokens:
-            end: int = min(start + chunk_size, total_tokens)
-            chunk_tokens: List[int] = tokens[start:end]
-            chunks.append(self._encoding.decode(chunk_tokens))
-
-            if end >= total_tokens:
+        while start < len(tokens):
+            end = min(start + self._chunk_size, len(tokens))
+            chunks.append(self._encoding.decode(tokens[start:end]))
+            if end >= len(tokens):
                 break
-
             start += step
 
         return chunks
