@@ -1,4 +1,5 @@
-"""Punto de entrada de ejecución del motor Chaskiwasi.
+"""
+Punto de entrada de ejecución del motor Chaskiwasi.
 
 El trigger solo orquesta el core. No conoce Chaskitambo, Quipu ni ningún dominio.
 """
@@ -28,15 +29,18 @@ class ChaskiwasiTrigger:
         output_json_path: Optional[str | Path] = None,
     ) -> Dict[str, Any]:
         path = Path(file_path)
+
         if not path.exists():
-            raise FileNotFoundError(f"El archivo especificado no existe: {path}")
-        return await asyncio.to_thread(
-            self.process_bytes,
-            global_id,
-            plugin_name,
-            path.read_bytes(),
-            output_json_path,
-            path.stem,
+            raise FileNotFoundError(
+                f"El archivo especificado no existe: {path}"
+            )
+
+        return await self.process_bytes(
+            global_id=global_id,
+            plugin_name=plugin_name,
+            pdf_bytes=path.read_bytes(),
+            output_json_path=output_json_path,
+            source_label=path.stem,
         )
 
     async def process_bytes(
@@ -51,6 +55,7 @@ class ChaskiwasiTrigger:
             raise ValueError("pdf_bytes no puede estar vacío.")
 
         PluginRegistry.get(plugin_name)
+
         output_path = (
             Path(output_json_path)
             if output_json_path is not None
@@ -58,6 +63,7 @@ class ChaskiwasiTrigger:
         )
 
         consolidator = ChaskyConsolidator()
+
         return await asyncio.to_thread(
             consolidator.build_master_expediente,
             global_id=global_id,
@@ -74,11 +80,17 @@ class ChaskiwasiTrigger:
         output_json_path: Optional[str | Path] = None,
     ) -> Dict[str, Any]:
         PluginRegistry.get(plugin_name)
+
         data_sources: Dict[str, bytes] = {}
+
         for source_label, file_path in files.items():
             path = Path(file_path)
+
             if not path.exists():
-                raise FileNotFoundError(f"El archivo especificado no existe: {path}")
+                raise FileNotFoundError(
+                    f"El archivo especificado no existe: {path}"
+                )
+
             data_sources[source_label] = path.read_bytes()
 
         output_path = (
@@ -86,7 +98,9 @@ class ChaskiwasiTrigger:
             if output_json_path is not None
             else self.output_dir / f"master_{global_id}.json"
         )
+
         consolidator = ChaskyConsolidator()
+
         return await asyncio.to_thread(
             consolidator.build_master_expediente,
             global_id=global_id,

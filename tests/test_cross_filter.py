@@ -1,58 +1,65 @@
-from enum import Enum
+# tests/test_cross_filter.py
 
-from chaskiwasi.plugins.contracts import PluginDefinition
-from chaskiwasi.plugins.registry import PluginRegistry
-from chaskiwasi.config.taxonomy_registry import Taxonomy
-from chaskiwasi.query_engine.cross_filter import CrossQueryFilter, IntentRule
+from chaskiwasi.query_engine.cross_filter import (
+    CrossQueryFilter,
+)
 
-
-class Source(Enum):
-    DOCUMENT = "document"
-
-
-class Section(Enum):
-    TITLE = "title"
-    BODY = "body"
+from chaskiwasi_plugin_remaju.query_rules import (
+    get_query_rules,
+)
 
 
-def _plugin():
-    taxonomy = Taxonomy("test_filter", Source, Section)
-
-    return PluginDefinition(
-        name="test_filter",
-        taxonomy=taxonomy,
-        strategy_factory=lambda context: [],
-        query_rules_factory=lambda: (
-            IntentRule(
-                keywords=("titulo", "título"),
-                metadata_filter={"tipo_seccion": "title"},
-                priority=10,
-            ),
-        ),
+def test_single_intent_keeps_section_filter():
+    query_filter = CrossQueryFilter(
+        load_plugins=False,
+        custom_rules=get_query_rules(),
     )
 
+    result = query_filter.generate_where_clause(
+        "¿Quién es el demandado?"
+    )
 
-def test_cross_filter_loads_plugin_rules():
-    PluginRegistry.clear()
-    PluginRegistry.register(_plugin())
-
-    query_filter = CrossQueryFilter()
-    where = query_filter.generate_where_clause("quiero el título", "DOC-1", "test_filter")
-
-    assert where == {
+    assert result == {
         "$and": [
-            {"id_documento": "DOC-1"},
-            {"plugin": "test_filter"},
-            {"tipo_seccion": "title"},
+            {
+                "$and": [
+                    {
+                        "fuente": "remaju_resolution"
+                    },
+                    {
+                        "tipo_seccion": "header"
+                    },
+                ]
+            }
         ]
     }
 
+    def test_multiple_intents_are_combined_with_or():
+        query_filter = CrossQueryFilter(
+            load_plugins=False,
+            custom_rules=get_query_rules(),
+        )
 
-def test_cross_filter_can_filter_only_by_plugin():
-    PluginRegistry.clear()
-    PluginRegistry.register(_plugin())
+        result = query_filter.generate_where_clause(
+            "demandado y dirección del inmueble"
+        )
 
-    query_filter = CrossQueryFilter()
-    where = query_filter.generate_where_clause("consulta general", plugin_name="test_filter")
+        serialized = str(result)
 
-    assert where == {"plugin": "test_filter"}
+        assert "$or" in serialized
+        assert "header" in serialized
+        assert "body" in serialized
+    def test_cartel_intent_does_not_require_footer():
+        query_filter = CrossQueryFilter(
+            load_plugins=False,
+            custom_rules=get_query_rules(),
+        )
+
+        result = query_filter.generate_where_clause(
+            "¿Se ordenó fijar carteles?"
+        )
+
+        serialized = str(result)
+
+        assert "remaju_resolution" in serialized
+        assert "footer" not in serialized
