@@ -1,245 +1,128 @@
-# D:\libs\chaskywasi\src\chaskiwasi\cli.py
-
-"""CLI del motor Chaskiwasi, sin dependencias sobre orquestadores externos."""
-
-from __future__ import annotations
-
-import argparse
-import asyncio
+# src/chaskiwasi/cli.py
+import os
+import sys
 import importlib.metadata
-from pathlib import Path
-from typing import Any
+import pymupdf as fitz
+import typer
+from loguru import logger
 
-from rich import print
-from rich.table import Table
+from chaskiwasi.contract import BaseExtractionConfig
+from chaskiwasi.factory import ConfigurationFactory
+from chaskiwasi.main import ExtractorDocumentalUniversal
 
-from chaskiwasi.config.settings import settings
-from chaskiwasi.orchestration.trigger import ChaskiwasiTrigger
-from chaskiwasi.plugins.registry import PluginRegistry
-
-
-def _obtener_mapa_versiones_entry_points() -> dict[str, str]:
-    """Obtiene un diccionario {nombre_plugin: version} desde los Entry Points de 'chaskiwasi.plugins'."""
-    mapa_versiones: dict[str, str] = {}
-    try:
-        eps = importlib.metadata.entry_points()
-        if hasattr(eps, "select"):
-            plugin_eps = eps.select(group="chaskiwasi.plugins")
-        elif isinstance(eps, dict):
-            plugin_eps = eps.get("chaskiwasi.plugins", [])
-        else:
-            plugin_eps = []
-
-        for ep in plugin_eps:
-            dist = getattr(ep, "dist", None)
-            if dist and getattr(dist, "version", None):
-                mapa_versiones[ep.name] = dist.version
-    except Exception:
-        pass
-    return mapa_versiones
+# Definición de la aplicación principal y subcomandos
+app = typer.Typer(help="CLI oficial del motor de extracción documental Chaskiwasi.")
+ingesta_app = typer.Typer(help="Comandos de ingesta documental.")
+app.add_typer(ingesta_app, name="ingesta")
 
 
-def _obtener_version_plugin(
-    plugin_name: str,
-    plugin: Any,
-    ep_versions: dict[str, str],
-) -> str:
-    """Resuelve la versión exacta del plugin usando una cadena de fallbacks precisa."""
-    # 1. Primera prioridad: Versión según el Entry Point de pip/poetry (ej. 'remaju' -> '0.2.0')
-    if plugin_name in ep_versions:
-        return ep_versions[plugin_name]
+@app.command("list", help="Lista los plugins instalados y sus versiones.")
+def cmd_list():
+    """Lista los plugins instalados, su versión y verifica el cumplimiento del contrato."""
+    logger.info("Inspeccionando plugins registrados en 'chaskiwasi.configs'...")
+    
+    grupo_plugin = "chaskiwasi.configs"
+    
+    if sys.version_info >= (3, 10):
+        entry_points = importlib.metadata.entry_points(group=grupo_plugin)
+    else:
+        entry_points = importlib.metadata.entry_points().get(grupo_plugin, [])
 
-    # 2. Atributos explícitos en el objeto plugin (si el plugin define .version o .VERSION)
-    version = getattr(plugin, "version", None) or getattr(plugin, "VERSION", None)
-    if version:
-        return str(version)
-
-    # 3. Inspección del módulo de la clase real (evitando paquetes base de chaskiwasi)
-    obj_type = type(plugin) if not isinstance(plugin, type) else plugin
-    module_name = getattr(obj_type, "__module__", "") or getattr(plugin, "__module__", "")
-
-    if module_name and not module_name.startswith("chaskiwasi."):
-        root_package = module_name.split(".")[0]
-
-        # Mapear módulo importado (chaskiwasi_plugin_remaju) a distribución PyPI (chaskiwasi-plugin-remaju)
-        try:
-            if hasattr(importlib.metadata, "packages_distributions"):
-                pkgs_map = importlib.metadata.packages_distributions()
-                dists = pkgs_map.get(root_package, [])
-                if dists:
-                    return importlib.metadata.version(dists[0])
-        except Exception:
-            pass
-
-        try:
-            return importlib.metadata.version(root_package)
-        except importlib.metadata.PackageNotFoundError:
-            pass
-
-        try:
-            module = __import__(root_package)
-            if hasattr(module, "__version__"):
-                return str(module.__version__)
-        except Exception:
-            pass
-
-    return "N/A"
-
-
-def listar_plugins() -> None:
-    """Lista los plugins Chaskiwasi instalados y sus características."""
-    plugins = PluginRegistry.all()
-
-    if not plugins:
-        print("[yellow]No se detectaron plugins Chaskiwasi.[/yellow]")
+    if not entry_points:
+        logger.warning("No se encontraron plugins instalados en el entorno.")
         return
 
-    ep_versions = _obtener_mapa_versiones_entry_points()
+    # Formateo de la tabla de plugins (se usa print normal para mantener limpia la estructura visual sin los timestamps de loguru)
+    tabla = f"\n{'PLUGIN (Clave)':<25} | {'PAQUETE DISTRIBUCIÓN':<30} | {'VERSIÓN':<10} | {'ESTADO CONTRATO':<15}\n"
+    tabla += "-" * 88 + "\n"
 
-    table = Table(title="Plugins Chaskiwasi")
-    table.add_column("Plugin", style="bold cyan")
-    table.add_column("Versión", justify="center", style="green")
-    table.add_column("Taxonomía")
-    table.add_column("Extractor", justify="center")
-    table.add_column("Reglas", justify="center")
+    for ep in entry_points:
+        plugin_key = ep.name
+        dist_name = ep.dist.name if ep.dist else "Desconocido"
+        
+        version = "N/A"
+        if ep.dist:
+            try:
+                version = ep.dist.version
+            except Exception:
+                pass
 
-    for name, plugin in sorted(plugins.items()):
-        version_str = _obtener_version_plugin(name, plugin, ep_versions)
-        taxonomy_name = getattr(getattr(plugin, "taxonomy", None), "name", "N/A")
+        cumple_contrato = False
+        try:
+            config_cls = ep.load()
+            if issubclass(config_cls, BaseExtractionConfig):
+                cumple_contrato = True
+        except Exception as e:
+            logger.debug(f"Error cargando plugin '{plugin_key}': {e}")
 
-        has_extractor = "sí" if getattr(plugin, "extractor", None) else "no"
-        has_rules = "sí" if getattr(plugin, "query_rules_factory", None) else "no"
-
-        table.add_row(
-            name,
-            version_str,
-            taxonomy_name,
-            has_extractor,
-            has_rules,
-        )
-
-    print(table)
-
-
-def procesar_pdf(
-    pdf_path: Path,
-    plugin: str,
-    lote_id: str | None,
-) -> None:
-    """Procesa un PDF mediante un plugin y muestra el resultado."""
-    execution_id = lote_id or f"PDF-{pdf_path.stem}"
-
-    print(f"[cyan]Chaskiwasi -> {pdf_path}[/cyan]")
-    print(f"[dim]Plugin: {plugin} | ID: {execution_id}[/dim]")
-
-    result = asyncio.run(
-        ChaskiwasiTrigger().process_file(
-            global_id=execution_id,
-            plugin_name=plugin,
-            file_path=pdf_path,
-        )
-    )
-
-    print("[green]Procesamiento completado.[/green]")
-    print(result)
+        estado = "✅ Válido" if cumple_contrato else "❌ Inválido (Falla contrato)"
+        tabla += f"{plugin_key:<25} | {dist_name:<30} | {version:<10} | {estado:<15}\n"
+    
+    tabla += "-" * 88 + "\n"
+    print(tabla)
 
 
-def ver_estado_vectores() -> None:
-    """Muestra la ruta de persistencia configurada para ChromaDB."""
-    print(
-        f"[cyan]Persistencia ChromaDB:[/cyan] "
-        f"{settings.CHROMA_PERSISTENT_PATH}"
-    )
+@ingesta_app.command("pdf", help="Ingestar documentos PDF.")
+def cmd_ingesta_pdf(
+    path: str = typer.Argument(..., help="Ruta al archivo PDF individual o carpeta."),
+    plugin: str = typer.Option(None, "--plugin", "-p", help="Clave del plugin específico.")
+):
+    """Procesa un archivo PDF o carpeta de PDFs utilizando el motor universal."""
+    ruta_objetivo = os.path.abspath(path)
+    
+    if not os.path.exists(ruta_objetivo):
+        logger.error(f"La ruta '{ruta_objetivo}' no existe.")
+        raise typer.Exit(code=1)
 
+    factory = ConfigurationFactory()
+    
+    # Manejo de archivo individual vs carpeta
+    if os.path.isfile(ruta_objetivo) and ruta_objetivo.lower().endswith(".pdf"):
+        logger.info(f"Procesando archivo individual: {ruta_objetivo}")
+        
+        doc = fitz.open(ruta_objetivo)
+        texto_muestra = doc[0].get_text() if len(doc) > 0 else ""
+        doc.close()
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Motor documental y RAG de Chaskiwasi."
-    )
+        if plugin:
+            config_activa = factory.obtener_por_clave(plugin)
+        else:
+            config_activa = factory.autodetectar_configuracion(texto_muestra)
 
-    subparsers = parser.add_subparsers(
-        dest="command",
-        required=True,
-    )
+        carpeta_padre = os.path.dirname(ruta_objetivo)
+        procesador = ExtractorDocumentalUniversal(config=config_activa, carpeta_base=carpeta_padre)
+        
+        logger.info(f"Usando configuración: {config_activa.__class__.__name__}")
+        resultado = procesador.verificar_y_filtrar_pdf(ruta_objetivo)
+        logger.success(f"Resultado del filtrado inicial: {resultado}")
 
-    list_parser = subparsers.add_parser(
-        "list",
-        help="Lista los plugins instalados y sus versiones.",
-    )
+    elif os.path.isdir(ruta_objetivo):
+        logger.info(f"Procesando lote en carpeta: {ruta_objetivo}")
+        
+        archivos = [f for f in os.listdir(ruta_objetivo) if f.lower().endswith(".pdf")]
+        if not archivos:
+            logger.warning("No hay archivos PDF en la carpeta especificada.")
+            raise typer.Exit()
 
-    list_parser.set_defaults(
-        handler=lambda args: listar_plugins()
-    )
+        primer_pdf = os.path.join(ruta_objetivo, archivos[0])
+        doc = fitz.open(primer_pdf)
+        texto_muestra = doc[0].get_text() if len(doc) > 0 else ""
+        doc.close()
 
-    ingesta = subparsers.add_parser(
-        "ingesta",
-        help="Procesamiento documental.",
-    )
+        if plugin:
+            config_activa = factory.obtener_por_clave(plugin)
+        else:
+            config_activa = factory.autodetectar_configuracion(texto_muestra)
 
-    ingesta_sub = ingesta.add_subparsers(
-        dest="ingesta_command",
-        required=True,
-    )
-
-    pdf = ingesta_sub.add_parser(
-        "pdf",
-        help="Procesa un PDF mediante un plugin.",
-    )
-
-    pdf.add_argument(
-        "pdf_path",
-        type=Path,
-    )
-
-    pdf.add_argument(
-        "--plugin",
-        "-p",
-        required=True,
-    )
-
-    pdf.add_argument(
-        "--lote",
-        "-l",
-        default=None,
-    )
-
-    pdf.set_defaults(
-        handler=lambda args: procesar_pdf(
-            args.pdf_path,
-            args.plugin,
-            args.lote,
-        )
-    )
-
-    vector = subparsers.add_parser(
-        "vector",
-        help="Operaciones de almacenamiento vectorial.",
-    )
-
-    vector_sub = vector.add_subparsers(
-        dest="vector_command",
-        required=True,
-    )
-
-    status = vector_sub.add_parser(
-        "status",
-        help="Muestra la ruta de persistencia.",
-    )
-
-    status.set_defaults(
-        handler=lambda args: ver_estado_vectores()
-    )
-
-    return parser
-
-
-def main() -> None:
-    args = build_parser().parse_args()
-    args.handler(args)
-
-
-app = main
+        logger.info(f"Usando configuración: {config_activa.__class__.__name__}")
+        procesador = ExtractorDocumentalUniversal(config=config_activa, carpeta_base=ruta_objetivo)
+        procesador.procesar_carpeta_local()
+        
+        logger.success("Procesamiento por lotes finalizado correctamente.")
+    else:
+        logger.error("La ruta proporcionada no es un archivo PDF válido ni una carpeta.")
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
-    main()
+    app()
