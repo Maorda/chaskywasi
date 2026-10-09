@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chaskiwasi"  # <-- Cambiado al nombre real de tu librería
-version = "0.3.0"
+version = "0.2.2"
 description = "Sistema de consulta semántica para fuentes jurídicas."
 readme = "README.md"
 authors = [
@@ -21,24 +21,15 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "docling>=2.0.0",
-    "tiktoken>=0.7.0",
-    "chromadb>=0.5.0",
-    "ijson>=3.3.0",
-    "requests>=2.32.0",
-    "rich>=13.0.0"
-]
-
-[project.optional-dependencies]
-gemini = [
-    "google-genai>=0.1.0"
-]
-
-dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "anyio>=4.0.0",
-    "faker>=20.0.0"
+    "pymupdf>=1.24.0,<2.0.0",
+    "opencv-python>=4.8.0,<5.0.0",
+    "pytesseract>=0.3.10,<4.1.3",
+    "deskew>=1.5.0,<2.0.0",
+    "google-genai>=2.0.0,<3.0.0",     # Alineado con la evolución actual del SDK de Gemini
+    "python-dotenv>=1.0.0,<2.0.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "docling>=2.0.0,<3.0.0",
+    "rapidocr-onnxruntime>=1.3.0,<2.0.0"
 ]
 
 [project.urls]
@@ -48,8 +39,5 @@ Issues = "https://github.com/Maorda/chaskywasi/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/chaskiwasi"]
 
-# REEMPLAZA EL BLOQUE ANTERIOR POR ESTE CON LA RUTA INTERNA REAL:
 [project.scripts]
 chaskiwasi = "chaskiwasi.cli:app"
-
-
