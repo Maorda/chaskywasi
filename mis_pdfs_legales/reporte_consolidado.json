@@ -1,0 +1,14 @@
+{
+  "fecha_ejecucion": "2026-10-09 19:22:44",
+  "total_processed": 1,
+  "exitosos_completos": 1,
+  "con_campos_faltantes": 0,
+  "enviados_a_revision_manual": 0,
+  "detalles_lote": [
+    {
+      "archivo": "resolucion_00157-2014-0-2406-JM-CI-01.pdf",
+      "estado": "Capa 2 (Docling Local) - Completado al 100%",
+      "campos_faltantes": []
+    }
+  ]
+}

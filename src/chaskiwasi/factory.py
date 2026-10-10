@@ -1,65 +1,146 @@
 # factory.py
+"""Descubrimiento y selección explícita de configuraciones de extracción."""
+
 import importlib.metadata
 import sys
-from typing import Dict, Type, Optional
+from typing import Dict, List, Optional, Type
+
 from .contract import BaseExtractionConfig
 
 
 class ConfigurationFactory:
-    def __init__(self):
+    """Carga plugins instalados y selecciona una configuración sin fallback silencioso."""
+
+    GRUPO_PLUGINS = "chaskiwasi.plugins"
+    MIN_COINCIDENCIAS = 2
+
+    def __init__(self) -> None:
         self._configs: Dict[str, Type[BaseExtractionConfig]] = {}
         self._cargar_plugins()
 
-    def _cargar_plugins(self):
-        """Descubre automáticamente todos los plugins instalados vía pip 
-        que pertenezcan al grupo 'chaskiwasi.configs'.
-        """
-        grupo_plugin = "chaskiwasi.configs"
-        
-        # Compatibilidad con distintas versiones de Python
-        if sys.version_info >= (3, 10):
-            entry_points = importlib.metadata.entry_points(group=grupo_plugin)
-        else:
-            entry_points = importlib.metadata.entry_points().get(grupo_plugin, [])
+    @property
+    def claves_disponibles(self) -> tuple[str, ...]:
+        """Nombres de los plugins cargados, en orden de registro."""
+        return tuple(self._configs.keys())
 
-        for ep in entry_points:
+    def _obtener_entry_points(self):
+        """Obtiene entry points de forma compatible con distintas versiones de Python."""
+        entry_points = importlib.metadata.entry_points()
+        if hasattr(entry_points, "select"):
+            return entry_points.select(group=self.GRUPO_PLUGINS)
+        return entry_points.get(self.GRUPO_PLUGINS, [])
+
+    def _cargar_plugins(self) -> None:
+        for entry_point in self._obtener_entry_points():
             try:
-                # Carga la clase de configuración expuesta por el paquete externo
-                config_cls = ep.load()
-                self._configs[ep.name] = config_cls
-                print(f"[Plugin Cargado] -> '{ep.name}' desde el paquete '{ep.dist.name}'")
-            except Exception as e:
-                print(f"[!] Error cargando el plugin {ep.name}: {str(e)}")
+                config_cls = entry_point.load()
+                self.registrar_configuracion(entry_point.name, config_cls)
+                distribucion = getattr(getattr(entry_point, "dist", None), "name", "desconocida")
+                print(
+                    f"[Plugin Cargado] -> '{entry_point.name}' "
+                    f"desde el paquete '{distribucion}'"
+                )
+            except Exception as exc:
+                print(f"[!] Error cargando el plugin '{entry_point.name}': {exc}")
 
-    def registrar_configuracion(self, clave: str, config_cls: Type[BaseExtractionConfig]):
-        """Permite registro manual si se requiere en tiempo de ejecución."""
+    def registrar_configuracion(
+        self,
+        clave: str,
+        config_cls: Type[BaseExtractionConfig],
+    ) -> None:
+        """Registra una clase de configuración validando su contrato."""
+        if not isinstance(clave, str) or not clave.strip():
+            raise ValueError("La clave del plugin debe ser una cadena no vacía.")
+        if not isinstance(config_cls, type) or not issubclass(config_cls, BaseExtractionConfig):
+            raise TypeError(
+                f"El plugin '{clave}' debe ser una clase derivada de BaseExtractionConfig."
+            )
+
+        instancia = config_cls()
+        for atributo in (
+            "model_class",
+            "model_name",
+            "palabras_clave",
+            "prompt_extraccion",
+            "extraer_identificador",
+            "validar_y_estructurar",
+            "campos_requeridos",
+            "json_schema",
+        ):
+            if not hasattr(instancia, atributo):
+                raise TypeError(
+                    f"El plugin '{clave}' no cumple el contrato: falta '{atributo}'."
+                )
+
+        palabras = instancia.palabras_clave
+        if not isinstance(palabras, (list, tuple)) or not palabras:
+            raise ValueError(
+                f"El plugin '{clave}' debe declarar palabras_clave como lista no vacía."
+            )
         self._configs[clave] = config_cls
 
     def obtener_por_clave(self, clave: str) -> BaseExtractionConfig:
-        if clave not in self._configs:
-            raise ValueError(f"Configuración '{clave}' no encontrada. Disponibles: {list(self._configs.keys())}")
-        return self._configs[clave]()
+        try:
+            config_cls = self._configs[clave]
+        except KeyError as exc:
+            disponibles = ", ".join(self.claves_disponibles) or "(ninguno)"
+            raise ValueError(
+                f"Configuración '{clave}' no encontrada. Disponibles: {disponibles}"
+            ) from exc
+        return config_cls()
+
+    @staticmethod
+    def _normalizar(texto: str) -> str:
+        return " ".join((texto or "").casefold().split())
 
     def autodetectar_configuracion(self, texto_muestra: str) -> BaseExtractionConfig:
-        """Analiza el texto introductorio del PDF y selecciona automáticamente
-        la configuración correcta evaluando las palabras clave de todos los plugins cargados.
-        """
-        mejor_coincidencia: Optional[BaseExtractionConfig] = None
-        max_coincidencias = 0
+        """Selecciona el plugin con mayor coincidencia; nunca escoge uno por defecto."""
+        texto = self._normalizar(texto_muestra)
+        if not texto:
+            raise LookupError(
+                "No hay texto suficiente para autodetectar el plugin. "
+                "El documento requiere revisión manual o una selección explícita."
+            )
+        if not self._configs:
+            raise LookupError("No hay configuraciones ni plugins de extracción disponibles.")
 
-        for config_cls in self._configs.values():
-            instancia = config_cls()
-            coincidencias = sum(1 for kw in instancia.palabras_clave if kw.lower() in texto_muestra.lower())
-            if coincidencias > max_coincidencias:
-                max_coincidencias = coincidencias
-                mejor_coincidencia = instancia
+        puntuaciones: list[tuple[int, str, Type[BaseExtractionConfig]]] = []
+        for clave, config_cls in self._configs.items():
+            config = config_cls()
+            palabras = {
+                self._normalizar(palabra)
+                for palabra in config.palabras_clave
+                if isinstance(palabra, str) and palabra.strip()
+            }
+            coincidencias = sum(1 for palabra in palabras if palabra in texto)
+            puntuaciones.append((coincidencias, clave, config_cls))
 
-        if mejor_coincidencia and max_coincidencias >= 2:
-            return mejor_coincidencia
+        puntuaciones.sort(key=lambda elemento: elemento[0], reverse=True)
+        mejor_puntuacion, mejor_clave, mejor_clase = puntuaciones[0]
 
-        # Fallback si no encuentra coincidencias claras (toma la primera disponible)
-        if self._configs:
-            primera_clave = list(self._configs.keys())[0]
-            return self._configs[primera_clave]()
-            
-        raise ValueError("No hay configuraciones ni plugins de extracción disponibles.")
+        if mejor_puntuacion < self.MIN_COINCIDENCIAS:
+            resumen = ", ".join(
+                f"{clave}={puntuacion}" for puntuacion, clave, _ in puntuaciones
+            )
+            raise LookupError(
+                "Ningún plugin alcanzó el mínimo de coincidencias "
+                f"({self.MIN_COINCIDENCIAS}). Puntuaciones: {resumen}"
+            )
+
+        empatados = [
+            clave
+            for puntuacion, clave, _ in puntuaciones
+            if puntuacion == mejor_puntuacion
+        ]
+        if len(empatados) > 1:
+            raise LookupError(
+                "Autodetección ambigua: varios plugins obtuvieron la misma puntuación "
+                f"({mejor_puntuacion}): {', '.join(empatados)}. "
+                "Registra una regla de desempate o selecciona el plugin explícitamente."
+            )
+
+        print(
+            f"[Plugin Detectado] -> '{mejor_clave}' "
+            f"({mejor_puntuacion} coincidencias)"
+        )
+        return mejor_clase()
