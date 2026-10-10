@@ -1,285 +1,113 @@
-
 # src/chaskiwasi/cli.py
-
-import importlib.metadata
 import os
 import sys
-from pathlib import Path
-from typing import Optional
-
+import asyncio
+import importlib.metadata
+import pymupdf as fitz
 import typer
 from loguru import logger
 
 from chaskiwasi.contract import BaseExtractionConfig
 from chaskiwasi.factory import ConfigurationFactory
 from chaskiwasi.main import ExtractorDocumentalUniversal
+from chaskiwasi.bridge import ChaskitamboChaskiwasiBridge
+from chaskitambo.core.engine import ChaskitamboEngine
 
-
-app = typer.Typer(
-    help="CLI oficial del motor de extracción documental Chaskiwasi.",
-    no_args_is_help=True,
-)
-
-ingesta_app = typer.Typer(
-    help="Comandos de ingesta documental.",
-    no_args_is_help=True,
-)
-
+app = typer.Typer(help="CLI oficial del motor de extracción documental Chaskiwasi.")
+ingesta_app = typer.Typer(help="Comandos de ingesta documental.")
 app.add_typer(ingesta_app, name="ingesta")
-
-
-def _obtener_entry_points():
-    """Obtiene los entry points de plugins compatibles con Python."""
-    grupo_plugin = "chaskiwasi.plugins"
-
-    if sys.version_info >= (3, 10):
-        return importlib.metadata.entry_points(group=grupo_plugin)
-
-    return importlib.metadata.entry_points().get(grupo_plugin, [])
-
-
-def _crear_factory() -> ConfigurationFactory:
-    """Crea la fábrica y verifica que existan plugins registrados."""
-    factory = ConfigurationFactory()
-
-    if not _obtener_entry_points():
-        logger.error(
-            "No se encontraron plugins instalados en "
-            "'chaskiwasi.plugins'."
-        )
-        raise typer.Exit(code=1)
-
-    return factory
-
-
-def _resolver_carpeta(path: str) -> Path:
-    """Valida y devuelve la ruta absoluta de una carpeta."""
-    carpeta = Path(path).expanduser().resolve()
-
-    if not carpeta.exists():
-        logger.error(f"La ruta no existe: {carpeta}")
-        raise typer.Exit(code=1)
-
-    if not carpeta.is_dir():
-        logger.error(f"La ruta no es una carpeta: {carpeta}")
-        raise typer.Exit(code=1)
-
-    archivos_pdf = [
-        archivo
-        for archivo in carpeta.iterdir()
-        if archivo.is_file() and archivo.suffix.lower() == ".pdf"
-    ]
-
-    if not archivos_pdf:
-        logger.error(f"No se encontraron archivos PDF en: {carpeta}")
-        raise typer.Exit(code=1)
-
-    return carpeta
-
-
-def _ejecutar_plugin(plugin: str, path: str) -> None:
-    """Ejecuta un plugin explícito sobre los PDF de una carpeta."""
-    carpeta = _resolver_carpeta(path)
-    factory = _crear_factory()
-
-    try:
-        config_activa = factory.obtener_por_clave(plugin)
-    except (ValueError, KeyError) as exc:
-        logger.error(f"No se pudo seleccionar el plugin '{plugin}': {exc}")
-        raise typer.Exit(code=1) from exc
-
-    if not isinstance(config_activa, BaseExtractionConfig):
-        logger.error(
-            f"El plugin '{plugin}' no devuelve una configuración "
-            "compatible con BaseExtractionConfig."
-        )
-        raise typer.Exit(code=1)
-
-    logger.info(f"Plugin seleccionado: {plugin}")
-    logger.info(
-        f"Configuración activa: {type(config_activa).__name__}"
-    )
-    logger.info(f"Carpeta de entrada: {carpeta}")
-
-    procesador = ExtractorDocumentalUniversal(
-        config=config_activa,
-        carpeta_base=str(carpeta),
-    )
-
-    try:
-        procesador.procesar_carpeta_local()
-    except Exception as exc:
-        logger.exception(
-            f"Falló el procesamiento con el plugin '{plugin}': {exc}"
-        )
-        raise typer.Exit(code=1) from exc
-
-    logger.success(
-        f"Procesamiento finalizado. Carpeta de resultados: {carpeta}"
-    )
-
-
-@app.command("run", help="Ejecuta un plugin sobre una carpeta de PDF.")
-def cmd_run(
-    plugin: str = typer.Argument(
-        ...,
-        help="Clave del plugin instalado. Ejemplo: remaju.",
-    ),
-    path: str = typer.Option(
-        ".",
-        "--path",
-        "-d",
-        help="Carpeta con los PDF. Por defecto, la carpeta actual.",
-    ),
-):
-    """
-    Ejecuta el plugin indicado sin autodetección.
-
-    Ejemplo:
-        chaskiwasi run remaju
-        chaskiwasi run remaju --path D:\\documentos\\remaju
-    """
-    _ejecutar_plugin(plugin=plugin, path=path)
 
 
 @app.command("list", help="Lista los plugins instalados y sus versiones.")
 def cmd_list():
-    """Lista los plugins y comprueba su herencia del contrato base."""
-    logger.info(
-        "Inspeccionando plugins registrados en 'chaskiwasi.plugins'..."
-    )
-
-    entry_points = _obtener_entry_points()
+    """Lista los plugins instalados, su versión y verifica el cumplimiento del contrato."""
+    logger.info("Inspeccionando plugins registrados en 'chaskiwasi.configs'...")
+    
+    grupo_plugin = "chaskiwasi.configs"
+    entry_points = importlib.metadata.entry_points(group=grupo_plugin) if sys.version_info >= (3, 10) else importlib.metadata.entry_points().get(grupo_plugin, [])
 
     if not entry_points:
-        logger.warning("No se encontraron plugins instalados.")
+        logger.warning("No se encontraron plugins instalados en el entorno.")
         return
 
-    encabezado = (
-        f"\n{'PLUGIN (Clave)':<25} | "
-        f"{'PAQUETE DISTRIBUCIÓN':<30} | "
-        f"{'VERSIÓN':<12} | "
-        f"{'ESTADO CONTRATO':<25}\n"
-    )
-    tabla = encabezado + "-" * 100 + "\n"
+    tabla = f"\n{'PLUGIN (Clave)':<25} | {'PAQUETE DISTRIBUCIÓN':<30} | {'VERSIÓN':<10} | {'ESTADO CONTRATO':<15}\n"
+    tabla += "-" * 88 + "\n"
 
     for ep in entry_points:
         plugin_key = ep.name
         dist_name = ep.dist.name if ep.dist else "Desconocido"
-        version = ep.dist.version if ep.dist else "N/A"
+        version = ep.dist.version if ep.dist and ep.dist.version else "N/A"
 
+        cumple_contrato = False
         try:
             config_cls = ep.load()
+            if issubclass(config_cls, BaseExtractionConfig):
+                cumple_contrato = True
+        except Exception as e:
+            logger.debug(f"Error cargando plugin '{plugin_key}': {e}")
 
-            if not isinstance(config_cls, type):
-                raise TypeError(
-                    "El entry point no apunta a una clase."
-                )
-
-            if not issubclass(config_cls, BaseExtractionConfig):
-                raise TypeError(
-                    "La clase no hereda de BaseExtractionConfig."
-                )
-
-            # Comprueba también que la configuración pueda instanciarse.
-            config_cls()
-
-            estado = "Válido"
-        except Exception as exc:
-            estado = "Inválido"
-            logger.warning(
-                f"Plugin '{plugin_key}': {exc}"
-            )
-
-        tabla += (
-            f"{plugin_key:<25} | "
-            f"{dist_name:<30} | "
-            f"{version:<12} | "
-            f"{estado:<25}\n"
-        )
-
-    tabla += "-" * 100 + "\n"
+        estado = "✅ Válido" if cumple_contrato else "❌ Inválido (Falla contrato)"
+        tabla += f"{plugin_key:<25} | {dist_name:<30} | {version:<10} | {estado:<15}\n"
+    
+    tabla += "-" * 88 + "\n"
     print(tabla)
 
 
-@ingesta_app.command("pdf", help="Procesa una carpeta de PDF.")
+@ingesta_app.command("pdf", help="Ingestar documentos PDF desde una ruta o carpeta local.")
 def cmd_ingesta_pdf(
-    path: str = typer.Argument(
-        ...,
-        help="Ruta a una carpeta que contiene archivos PDF.",
-    ),
-    plugin: Optional[str] = typer.Option(
-        None,
-        "--plugin",
-        "-p",
-        help="Clave del plugin. Si se omite, se usa la autodetección "
-             "del primer PDF.",
-    ),
+    path: str = typer.Argument(..., help="Ruta al archivo PDF individual o carpeta."),
+    plugin: str = typer.Option(None, "--plugin", "-p", help="Clave del plugin específico.")
 ):
-    """
-    Mantiene el comando anterior de ingesta por compatibilidad.
-
-    Con --plugin, utiliza esa configuración explícitamente.
-    Sin --plugin, selecciona la configuración según el primer PDF.
-    """
-    carpeta = _resolver_carpeta(path)
-    factory = _crear_factory()
-
-    if plugin:
-        try:
-            config_activa = factory.obtener_por_clave(plugin)
-        except (ValueError, KeyError) as exc:
-            logger.error(
-                f"No se pudo seleccionar el plugin '{plugin}': {exc}"
-            )
-            raise typer.Exit(code=1) from exc
-    else:
-        import pymupdf as fitz
-
-        primer_pdf = next(
-            archivo
-            for archivo in sorted(carpeta.iterdir())
-            if archivo.is_file()
-            and archivo.suffix.lower() == ".pdf"
-        )
-
-        try:
-            with fitz.open(str(primer_pdf)) as documento:
-                texto_muestra = (
-                    documento[0].get_text()
-                    if len(documento) > 0
-                    else ""
-                )
-
-            config_activa = factory.autodetectar_configuracion(
-                texto_muestra
-            )
-        except Exception as exc:
-            logger.error(f"No se pudo detectar el plugin: {exc}")
-            raise typer.Exit(code=1) from exc
-
-    if not isinstance(config_activa, BaseExtractionConfig):
-        logger.error(
-            "La configuración seleccionada no cumple el contrato base."
-        )
+    """Procesa un archivo PDF o carpeta de PDFs utilizando el motor universal."""
+    ruta_objetivo = os.path.abspath(path)
+    
+    if not os.path.exists(ruta_objetivo):
+        logger.error(f"La ruta '{ruta_objetivo}' no existe.")
         raise typer.Exit(code=1)
 
-    logger.info(
-        f"Configuración seleccionada: {type(config_activa).__name__}"
-    )
+    factory = ConfigurationFactory()
+    
+    if os.path.isfile(ruta_objetivo) and ruta_objetivo.lower().endswith(".pdf"):
+        logger.info(f"Procesando archivo individual: {ruta_objetivo}")
+        doc = fitz.open(ruta_objetivo)
+        texto_muestra = doc[0].get_text() if len(doc) > 0 else ""
+        doc.close()
 
-    procesador = ExtractorDocumentalUniversal(
-        config=config_activa,
-        carpeta_base=str(carpeta),
-    )
+        config_activa = factory.obtener_por_clave(plugin) if plugin else factory.autodetectar_configuracion(texto_muestra)
+        procesador = ExtractorDocumentalUniversal(config=config_activa, carpeta_base=os.path.dirname(ruta_objetivo))
+        
+        logger.info(f"Usando configuración: {config_activa.__class__.__name__}")
+        resultado = procesador.verificar_y_filtrar_pdf(ruta_objetivo)
+        logger.success(f"Resultado del filtrado inicial: {resultado}")
+
+    elif os.path.isdir(ruta_objetivo):
+        logger.info(f"Procesando lote en carpeta: {ruta_objetivo}")
+        procesador = ExtractorDocumentalUniversal(config=None, carpeta_base=ruta_objetivo, factory=factory)
+        procesador.procesar_carpeta_local()
+    else:
+        logger.error("La ruta proporcionada no es un archivo PDF válido ni una carpeta.")
+        raise typer.Exit(code=1)
+
+
+@ingesta_app.command("web", help="Ejecuta un plugin de raspado de Chaskitambo y procesa los documentos en streaming.")
+def cmd_ingesta_web(
+    plugin: str = typer.Argument(..., help="Nombre del plugin de Chaskitambo a ejecutar (ej. remaju).")
+):
+    """Gatilla el motor Chaskitambo desde Chaskiwasi aplicando el pipeline de análisis de 4 capas y fusión."""
+    async def _run():
+        engine = ChaskitamboEngine()
+        bridge = ChaskitamboChaskiwasiBridge(output_dir="./salida_unificada")
+        
+        logger.info(f" -> [CHASKIWASI MASTER] Activando extractor web Chaskitambo con el plugin: '{plugin}'")
+        await engine.run_plugins_parallel([plugin], chaskywasi_handler=bridge.handle_document)
+
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
     try:
-        procesador.procesar_carpeta_local()
-    except Exception as exc:
-        logger.exception(f"Falló la ingesta: {exc}")
-        raise typer.Exit(code=1) from exc
-
-    logger.success("Ingesta finalizada.")
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        logger.warning(" -> [CLI] Ejecución de ingesta web interrumpida manualmente.")
 
 
 if __name__ == "__main__":

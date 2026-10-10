@@ -475,6 +475,59 @@ class ExtractorDocumentalUniversal:
             with open(ruta_reporte, "w", encoding="utf-8") as archivo_reporte:
                 json.dump(self.reporte_final, archivo_reporte, indent=2, ensure_ascii=False)
             print(f"[Reporte] Guardado en: {ruta_reporte}")
+    def procesar_pdf_desde_bytes(self, pdf_bytes: bytes, nombre_archivo: str) -> Dict[str, Any]:
+        """
+        Permite procesar un PDF provisto externamente en formato de bytes (streams),
+        aplicando la selección de plugin, filtrado por capas y extracción con Gemini.
+        """
+        import tempfile
+        doc_fitz = None
+        try:
+            doc_fitz = fitz.open(stream=pdf_bytes, filetype="pdf")
+            total_paginas = len(doc_fitz)
+            
+            if total_paginas == 0:
+                doc_fitz.close()
+                return {"requiere_revision_manual": True, "motivo": "El stream PDF no contiene páginas."}
+
+            # Seleccionar configuración usando la primera página de muestra
+            texto_muestra = doc_fitz[0].get_text() or ""
+            if not texto_muestra:
+                texto_muestra = self.ejecutar_pipeline_capa3(doc_fitz, [0]).strip()
+            
+            # Autodetección o asignación de configuración mediante el factory
+            if self.factory and not self.config:
+                selector = getattr(self.factory, "autodetectar_configuracion", None)
+                if selector:
+                    self.config = selector(texto_muestra)
+                    if self.config:
+                        self.json_schema = self.config.json_schema
+                        self.palabras_clave = list(self.config.palabras_clave)
+
+            doc_fitz.close()
+
+            # Guardar temporalmente en archivo seguro para reutilizar el pipeline de capas existente
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+                temp_file.write(pdf_bytes)
+                temp_path = temp_file.name
+
+            try:
+                resultado_filtrado = self.verificar_y_filtrar_pdf(temp_path)
+                return resultado_filtrado
+            finally:
+                if os.path.exists(temp_path):
+                    try:
+                        os.unlink(temp_path)
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            if doc_fitz:
+                try:
+                    doc_fitz.close()
+                except Exception:
+                    pass
+            return {"requiere_revision_manual": True, "motivo": f"Fallo procesando stream de bytes: {str(e)}"}
 
 if __name__ == "__main__":
     RUTA_CARPETA = r"D:\libs\chaskiwasi_simple\mis_pdfs_legales"
