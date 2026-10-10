@@ -76,3 +76,19 @@ class BaseExtractionConfig(ABC):
     def extraer_identificador(self, texto: str) -> str:
         """Estrategia regex para obtener el identificador primario del documento."""
         pass
+
+    def fusionar_datos(self, scraper_metadata: Dict[str, Any], ai_extraction_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Estrategia por defecto de fusión. Cada plugin puede sobrescribir este método
+        para aplicar reglas de negocio específicas sin acoplar el núcleo.
+        """
+        registro_unificado = dict(scraper_metadata)
+        datos_ia = ai_extraction_result.get("datos_extraidos", {})
+        
+        # Fusión genérica estándar
+        registro_unificado["datos_extraidos_ia"] = datos_ia
+        registro_unificado["analisis_metadata"] = {
+            "campos_faltantes_ia": ai_extraction_result.get("campos_faltantes", []),
+            "completado_exitosamente": ai_extraction_result.get("completado_exitosamente", False)
+        }
+        return registro_unificado
