@@ -1,0 +1,22 @@
+version: "1.0"
+pipeline_name: "estudio_integral_remates"
+
+primary_source:
+  plugin: "remaju"
+  extraction_keys:
+    # Esta llave le indica al CLI de dónde extraer el valor (ej. la partida registral) 
+    # de los metadatos de Remaju para pasárselo luego a Sunarp
+    partida_registral: "detalle.partida_registral" 
+  parameters:
+    headless: false
+
+#enrichments:
+#  - plugin: "sunarp"
+#    cardinality: "one-to-many"
+#    match_with: "partida_registral" # Debe coincidir con la llave definida arriba
+#    parameters:
+#      headless: false
+#      estrategia_sesion: "persistente_con_retroceso"
+
+target:
+  output_dir: "./salida_unificada"

@@ -28,6 +28,118 @@ class ChaskitamboChaskiwasiBridge:
             factory=self.factory
         )
 
+    async def handle_pipeline_maestro(self, paquete_maestro: Dict[str, Any]) -> None:
+        """
+        Procesa y consolida un paquete completo de pipeline multi-fuente:
+        documento principal (ej. Remaju) + enriquecimientos (ej. Sunarp, CEJ).
+        Genera el JSON Maestro unificado definitivo en la carpeta de salida.
+        """
+        doc_prin: ChaskiDocument = paquete_maestro.get("documento_principal")
+        enriquecimientos = paquete_maestro.get("enriquecimientos", {})
+        
+        if not doc_prin:
+            logger.warning("[-] Paquete maestro recibido sin documento principal. Omitiendo...")
+            return
+
+        id_ext = doc_prin.id_externo
+        fuente_prin = doc_prin.fuente
+        logger.info(f" -> [BRIDGE-MAESTRO] Consolidando pipeline integral para ID principal: {id_ext}")
+
+        # 1. Procesar el documento principal usando la lógica existente
+        # (Esto procesa su PDF, ejecuta Gemini y fusiona con el esquema del plugin principal)
+        config_plugin_prin = self.factory.obtener_por_clave(fuente_prin)
+        resultado_principal_fusionado = {}
+
+        if doc_prin.pdf_bytes and config_plugin_prin:
+            self.extractor_universal.config = config_plugin_prin
+            self.extractor_universal.json_schema = config_plugin_prin.json_schema
+            self.extractor_universal.palabras_clave = list(config_plugin_prin.palabras_clave)
+
+            resultado_lectura = self.extractor_universal.procesar_pdf_desde_bytes(
+                doc_prin.pdf_bytes, doc_prin.nombre_archivo_sugerido
+            )
+            tipo_capa = resultado_lectura.get("tipo_proceso", "Capa Desconocida")
+            
+            logger.info(f" -> [4-CAPAS RESOLUCIÓN] El documento fue resuelto por: {tipo_capa}")
+            
+            scraper_metadata_prin = doc_prin.metadatos.get("detalle", doc_prin.metadatos)
+
+            if not resultado_lectura.get("requiere_revision_manual"):
+                if resultado_lectura.get("modo_vision_multimodal"):
+                    resultado_ia = self.extractor_universal.ejecutar_extraccion_gemini(
+                        resultado_lectura["contenido_payload"], es_archivo_completo=True, nombre_archivo=doc_prin.nombre_archivo_sugerido
+                    )
+                else:
+                    resultado_ia = self.extractor_universal.ejecutar_extraccion_gemini(
+                        resultado_lectura["contenido_payload"], es_archivo_completo=False
+                    )
+                resultado_principal_fusionado = config_plugin_prin.fusionar_datos(scraper_metadata_prin, resultado_ia)
+            else:
+                resultado_principal_fusionado = {"metadatos_scraper": scraper_metadata_prin, "requiere_revision_manual": True}
+        else:
+            resultado_principal_fusionado = doc_prin.metadatos
+
+        # 2. Estructurar el JSON Maestro base
+        json_maestro = {
+            "id_externo_principal": id_ext,
+            "fuente_principal": fuente_prin,
+            "documento_principal": resultado_principal_fusionado,
+            "enriquecimientos_consolidados": {}
+        }
+
+        # 3. Procesar y adjuntar los enriquecimientos secundarios (Sunarp, CEJ, etc.)
+        for plugin_name, datos_enriquecimiento in enriquecimientos.items():
+            llave_usada = datos_enriquecimiento.get("llave_usada")
+            cardinality = datos_enriquecimiento.get("cardinality")
+            items_por_valor = datos_enriquecimiento.get("items_por_valor", {})
+
+            # Estructura contenedor para este plugin secundario
+            enriquecimiento_procesado = {
+                "llave_usada": llave_usada,
+                "cardinality": cardinality,
+                "registros": {}
+            }
+
+            config_plugin_sec = self.factory.obtener_por_clave(plugin_name)
+
+            for val_llave, lista_docs_secundarios in items_por_valor.items():
+                items_analizados_para_esta_llave = []
+
+                for doc_sec in lista_docs_secundarios:
+                    # Si el documento secundario contiene un PDF adjunto, lo pasamos por IA/Extractor universal
+                    if isinstance(doc_sec, ChaskiDocument) and doc_sec.pdf_bytes and config_plugin_sec:
+                        self.extractor_universal.config = config_plugin_sec
+                        self.extractor_universal.json_schema = config_plugin_sec.json_schema
+                        self.extractor_universal.palabras_clave = list(config_plugin_sec.palabras_clave)
+
+                        res_lec_sec = self.extractor_universal.procesar_pdf_desde_bytes(
+                            doc_sec.pdf_bytes, doc_sec.nombre_archivo_sugerido
+                        )
+                        meta_sec = doc_sec.metadatos.get("detalle", doc_sec.metadatos)
+
+                        if not res_lec_sec.get("requiere_revision_manual"):
+                            res_ia_sec = self.extractor_universal.ejecutar_extraccion_gemini(
+                                res_lec_sec["contenido_payload"], es_archivo_completo=True
+                            )
+                            fusion_sec = config_plugin_sec.fusionar_datos(meta_sec, res_ia_sec)
+                            items_analizados_para_esta_llave.append(fusion_sec)
+                        else:
+                            items_analizados_para_esta_llave.append({"metadatos": meta_sec, "requiere_revision_manual": True})
+                    else:
+                        # Si es un diccionario plano o metadatos puros sin PDF propio que analizar
+                        items_analizados_para_esta_llave.append(doc_sec)
+
+                enriquecimiento_procesado["registros"][val_llave] = items_analizados_para_esta_llave
+
+            json_maestro["enriquecimientos_consolidados"][plugin_name] = enriquecimiento_procesado
+
+        # 4. Persistencia del JSON Maestro Definitivo
+        ruta_destino = self.output_dir / f"{id_ext}_maestro_unificado.json"
+        with open(ruta_destino, "w", encoding="utf-8") as f:
+            json.dump(json_maestro, f, indent=2, ensure_ascii=False)
+
+        logger.success(f"[★★★ JSON MAESTRO GENERADO ★★★] Expediente {id_ext} unificado con éxito en: {ruta_destino.name}")
+
     async def handle_document(self, document: ChaskiDocument) -> None:
         """
         Método adaptador universal que procesa cualquier ChaskiDocument independiente de su fuente.

@@ -1,29 +1,120 @@
-# src/chaskiwasi/cli.py
-import os
 import sys
 import asyncio
-import importlib.metadata
-import pymupdf as fitz
+from pathlib import Path
 import typer
 from loguru import logger
-
+import yaml
+import importlib.metadata
 from chaskiwasi.contract import BaseExtractionConfig
-from chaskiwasi.factory import ConfigurationFactory
-from chaskiwasi.main import ExtractorDocumentalUniversal
-from chaskiwasi.bridge import ChaskitamboChaskiwasiBridge
-from chaskitambo.core.engine import ChaskitamboEngine
+app = typer.Typer(help="Motor orquestador central de Chaskiwasi basado en Pipelines YAML.")
 
-app = typer.Typer(help="CLI oficial del motor de extracción documental Chaskiwasi.")
-ingesta_app = typer.Typer(help="Comandos de ingesta documental.")
-app.add_typer(ingesta_app, name="ingesta")
+class PipelineOrchestrator:
+    def __init__(self, config_path: str):
+        self.config_path = Path(config_path)
+        self.config = self._load_config()
+        
+        # Caché en memoria exclusiva para esta ejecución: { "plugin_name": { "llave_valor": [datos_o_bytes] } }
+        self.cache_enriquecimientos = {}
+        # Locks asíncronos por cada fuente y llave para evitar condiciones de carrera simultáneas
+        self.locks = {}
 
+    def _load_config(self) -> dict:
+        if not self.config_path.exists():
+            logger.error(f"[-] No se encontró el archivo de configuración en: {self.config_path}")
+            raise typer.Exit(code=1)
+        
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    def _get_nested_value(self, data: dict, dotted_path: str):
+        """
+        Resuelve rutas anidadas de forma 100% agnóstica. 
+        Soporta diccionarios, índices numéricos (ej. '0') y proyección automática 
+        si encuentra una lista de objetos intermendia.
+        Ejemplo: 'detalle.inmuebles.partidaRegistral' extrae todas las partidas 
+        de la lista de inmuebles de forma transparente, sin que el CLI conozca el dominio.
+        """
+        parts = dotted_path.split(".")
+        current = data
+        
+        for i, part in enumerate(parts):
+            if current is None:
+                return None
+                
+            if isinstance(current, dict):
+                current = current.get(part)
+            elif isinstance(current, list):
+                if part.isdigit():
+                    idx = int(part)
+                    current = current[idx] if len(current) > idx else None
+                else:
+                    # PROYECCIÓN GENÉRICA: Si encontramos una lista y la ruta continúa,
+                    # recorremos cada elemento de la lista extrayendo la sub-ruta restante.
+                    remaining_path = ".".join(parts[i:])
+                    results = []
+                    for item in current:
+                        val = self._get_nested_value(item, remaining_path)
+                        if val is not None:
+                            if isinstance(val, list):
+                                for sub_v in val:
+                                    if sub_v not in results:
+                                        results.append(sub_v)
+                            elif val not in results:
+                                results.append(val)
+                    return results if results else None
+            else:
+                return None
+                
+        # Si el resultado final es un valor único, lo normalizamos a lista si el pipeline lo requiere, 
+        # o lo retornamos tal cual.
+        return current
+
+    async def obtener_o_ejecutar_enriquecimiento(
+        self, engine, bridge, plugin_name: str, match_key: str, match_value: str, cardinality: str, plugin_params: dict, param_name: str = None
+    ):
+        if plugin_name not in self.cache_enriquecimientos:
+            self.cache_enriquecimientos[plugin_name] = {}
+            self.locks[plugin_name] = {}
+
+        if match_value not in self.locks[plugin_name]:
+            self.locks[plugin_name][match_value] = asyncio.Lock()
+
+        async with self.locks[plugin_name][match_value]:
+            # 1. Comprobar Caché
+            if match_value in self.cache_enriquecimientos[plugin_name]:
+                logger.info(f"   ⚡ [CACHE HIT] '{plugin_name}' para '{match_key}: {match_value}' recuperado de la RAM.")
+                return self.cache_enriquecimientos[plugin_name][match_value]
+
+            # 2. Ejecutar Scraper en vivo
+            logger.info(f"   🌐 [CACHE MISS] Ejecutando '{plugin_name}' para [{match_key}: {match_value}]...")
+            
+            elementos_capturados = []
+
+            async def interceptor_secundario(doc_sec):
+                elementos_capturados.append(doc_sec)
+                if cardinality == "one-to-one":
+                    await bridge.handle_document(doc_sec)
+
+            # 🎯 INYECCIÓN 100% AGNÓSTICA BASADA EN CONFIGURACIÓN YAML
+            kwargs_ejecucion = dict(plugin_params)
+            if param_name and match_value:
+                kwargs_ejecucion[param_name] = match_value
+
+            await engine.run_plugins_parallel(
+                [plugin_name], 
+                chaskywasi_handler=interceptor_secundario,
+                plugin_kwargs={plugin_name: kwargs_ejecucion}
+            )
+
+            self.cache_enriquecimientos[plugin_name][match_value] = elementos_capturados
+            return elementos_capturados
 
 @app.command("list", help="Lista los plugins instalados y sus versiones.")
 def cmd_list():
     """Lista los plugins instalados, su versión y verifica el cumplimiento del contrato."""
-    logger.info("Inspeccionando plugins registrados en 'chaskiwasi.configs'...")
+    logger.info("Inspeccionando plugins registrados en 'chaskiwasi.plugins'...")
     
-    grupo_plugin = "chaskiwasi.configs"
+    grupo_plugin = "chaskiwasi.plugins"
     entry_points = importlib.metadata.entry_points(group=grupo_plugin) if sys.version_info >= (3, 10) else importlib.metadata.entry_points().get(grupo_plugin, [])
 
     if not entry_points:
@@ -52,54 +143,92 @@ def cmd_list():
     tabla += "-" * 88 + "\n"
     print(tabla)
 
-
-@ingesta_app.command("pdf", help="Ingestar documentos PDF desde una ruta o carpeta local.")
-def cmd_ingesta_pdf(
-    path: str = typer.Argument(..., help="Ruta al archivo PDF individual o carpeta."),
-    plugin: str = typer.Option(None, "--plugin", "-p", help="Clave del plugin específico.")
+@app.command("run", help="Ejecuta un pipeline inteligente basado en un archivo YAML de configuración.")
+def run_pipeline(
+    config: str = typer.Option(..., "--config", "-c", help="Ruta al archivo YAML de configuración del pipeline")
 ):
-    """Procesa un archivo PDF o carpeta de PDFs utilizando el motor universal."""
-    ruta_objetivo = os.path.abspath(path)
-    
-    if not os.path.exists(ruta_objetivo):
-        logger.error(f"La ruta '{ruta_objetivo}' no existe.")
-        raise typer.Exit(code=1)
-
-    factory = ConfigurationFactory()
-    
-    if os.path.isfile(ruta_objetivo) and ruta_objetivo.lower().endswith(".pdf"):
-        logger.info(f"Procesando archivo individual: {ruta_objetivo}")
-        doc = fitz.open(ruta_objetivo)
-        texto_muestra = doc[0].get_text() if len(doc) > 0 else ""
-        doc.close()
-
-        config_activa = factory.obtener_por_clave(plugin) if plugin else factory.autodetectar_configuracion(texto_muestra)
-        procesador = ExtractorDocumentalUniversal(config=config_activa, carpeta_base=os.path.dirname(ruta_objetivo))
-        
-        logger.info(f"Usando configuración: {config_activa.__class__.__name__}")
-        resultado = procesador.verificar_y_filtrar_pdf(ruta_objetivo)
-        logger.success(f"Resultado del filtrado inicial: {resultado}")
-
-    elif os.path.isdir(ruta_objetivo):
-        logger.info(f"Procesando lote en carpeta: {ruta_objetivo}")
-        procesador = ExtractorDocumentalUniversal(config=None, carpeta_base=ruta_objetivo, factory=factory)
-        procesador.procesar_carpeta_local()
-    else:
-        logger.error("La ruta proporcionada no es un archivo PDF válido ni una carpeta.")
-        raise typer.Exit(code=1)
-
-
-@ingesta_app.command("web", help="Ejecuta un plugin de raspado de Chaskitambo y procesa los documentos en streaming.")
-def cmd_ingesta_web(
-    plugin: str = typer.Argument(..., help="Nombre del plugin de Chaskitambo a ejecutar (ej. remaju).")
-):
-    """Gatilla el motor Chaskitambo desde Chaskiwasi aplicando el pipeline de análisis de 4 capas y fusión."""
+    """
+    Ejecución maestra:
+    Ejemplo: chaskiwasi run --config pipeline_remate.yaml
+    """
     async def _run():
+        from chaskitambo.core.engine import ChaskitamboEngine
+        from chaskiwasi.bridge import ChaskitamboChaskiwasiBridge
+
+        orchestrator = PipelineOrchestrator(config)
+        cfg = orchestrator.config
+
         engine = ChaskitamboEngine()
-        bridge = ChaskitamboChaskiwasiBridge(output_dir="./salida_unificada")
-        
-        logger.info(f" -> [CHASKIWASI MASTER] Activando extractor web Chaskitambo con el plugin: '{plugin}'")
-        await engine.run_plugins_parallel([plugin], chaskywasi_handler=bridge.handle_document)
+        target_cfg = cfg.get("target", {})
+        bridge = ChaskitamboChaskiwasiBridge(output_dir=target_cfg.get("output_dir", "./salida_unificada"))
+
+        primary_cfg = cfg.get("primary_source", {})
+        primary_plugin = primary_cfg.get("plugin")
+        extraction_keys = primary_cfg.get("extraction_keys", {})
+
+        logger.info(f" -> [PIPELINE] Iniciando '{cfg.get('pipeline_name')}' (Fuente primaria: {primary_plugin})")
+
+        # 1. Capturar elementos de la fuente primaria
+        registros_principales = []
+
+        async def interceptor_principal(doc):
+            registros_principales.append(doc)
+            logger.info(f" -> [{primary_plugin.upper()}] Documento principal capturado: ID {doc.id_externo}")
+
+        logger.info(f" -> [FASE 1] Ejecutando fuente primaria '{primary_plugin}'...")
+        await engine.run_plugins_parallel([primary_plugin], chaskywasi_handler=interceptor_principal)
+
+        # 2. Procesar enriquecimientos declarados en el YAML
+        enrichments = cfg.get("enrichments", [])
+
+        for doc_prin in registros_principales:
+            metadatos_doc = doc_prin.metadatos or {}
+            
+            # Contenedor unificado en memoria para el JSON Maestro de este expediente
+            paquete_maestro = {
+                "documento_principal": doc_prin,
+                "enriquecimientos": {}
+            }
+
+            for enrich in enrichments:
+                p_name = enrich.get("plugin")
+                cardinality = enrich.get("cardinality", "one-to-many")
+                match_field_key = enrich.get("match_with")
+                enrich_params = enrich.get("parameters", {})
+                param_name = enrich.get("param_name") # Obtenido puramente del YAML
+
+                dotted_path = extraction_keys.get(match_field_key, match_field_key)
+                match_value = orchestrator._get_nested_value(metadatos_doc, dotted_path) or metadatos_doc.get(match_field_key)
+
+                if not match_value:
+                    logger.warning(f"[-] El documento {doc_prin.id_externo} no encontró la clave '{match_field_key}'. Omitiendo '{p_name}'.")
+                    continue
+
+                resultados_enriquecimiento = await orchestrator.obtener_o_ejecutar_enriquecimiento(
+                    engine=engine,
+                    bridge=bridge,
+                    plugin_name=p_name,
+                    match_key=match_field_key,
+                    match_value=match_value,
+                    cardinality=cardinality,
+                    plugin_params=enrich_params,
+                    param_name=param_name
+                )
+
+                paquete_maestro["enriquecimientos"][p_name] = {
+                    "llave_usada": match_field_key,
+                    "valor_llave": match_value,
+                    "cardinality": cardinality,
+                    "items": resultados_enriquecimiento
+                }
+
+            # 3. Consolidación Final en Memoria y Envío al Bridge de Chaskiwasi
+            logger.info(f" -> [MAESTRO] Consolidando expediente {doc_prin.id_externo} con sus fuentes secundarias...")
+            
+            # Aquí entregamos el paquete unificado en memoria al bridge para el análisis de IA y la generación del JSON Maestro
+            await bridge.handle_pipeline_maestro(paquete_maestro)
+
+        logger.success(f"[★★★ PIPELINE '{cfg.get('pipeline_name')}' COMPLETADO CON ÉXITO ★★★]")
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -107,8 +236,7 @@ def cmd_ingesta_web(
     try:
         asyncio.run(_run())
     except KeyboardInterrupt:
-        logger.warning(" -> [CLI] Ejecución de ingesta web interrumpida manualmente.")
-
+        logger.warning(" -> [CLI] Ejecución del pipeline interrumpida manualmente por el usuario.")
 
 if __name__ == "__main__":
     app()
