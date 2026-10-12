@@ -9,14 +9,16 @@ primary_source:
     partida_registral: "detalle.partida_registral" 
   parameters:
     headless: false
+    limite_items: 2
 
-#enrichments:
-#  - plugin: "sunarp"
-#    cardinality: "one-to-many"
-#    match_with: "partida_registral" # Debe coincidir con la llave definida arriba
-#    parameters:
-#      headless: false
-#      estrategia_sesion: "persistente_con_retroceso"
+enrichments:
+  - plugin: "sunarp"
+    cardinality: "one-to-many"
+    match_with: "partida_registral" # Debe coincidir con la llave definida arriba
+    param_name: "partida_objetivo"
+    parameters:
+      headless: false
+      estrategia_sesion: "persistente_con_retroceso"
 
 target:
   output_dir: "./salida_unificada"

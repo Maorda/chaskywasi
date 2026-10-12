@@ -165,6 +165,9 @@ def run_pipeline(
         primary_cfg = cfg.get("primary_source", {})
         primary_plugin = primary_cfg.get("plugin")
         extraction_keys = primary_cfg.get("extraction_keys", {})
+        
+        # 🟢 1. Extraer los parámetros configurados en el YAML para la fuente primaria
+        primary_params = primary_cfg.get("parameters", {})
 
         logger.info(f" -> [PIPELINE] Iniciando '{cfg.get('pipeline_name')}' (Fuente primaria: {primary_plugin})")
 
@@ -175,8 +178,14 @@ def run_pipeline(
             registros_principales.append(doc)
             logger.info(f" -> [{primary_plugin.upper()}] Documento principal capturado: ID {doc.id_externo}")
 
-        logger.info(f" -> [FASE 1] Ejecutando fuente primaria '{primary_plugin}'...")
-        await engine.run_plugins_parallel([primary_plugin], chaskywasi_handler=interceptor_principal)
+        logger.info(f" -> [FASE 1] Ejecutando fuente primaria '{primary_plugin}' con parámetros {primary_params}...")
+        
+        # 🟢 2. Inyectar los parámetros a la ejecución paralela del motor
+        await engine.run_plugins_parallel(
+            [primary_plugin], 
+            chaskywasi_handler=interceptor_principal,
+            plugin_kwargs={primary_plugin: primary_params}
+        )
 
         # 2. Procesar enriquecimientos declarados en el YAML
         enrichments = cfg.get("enrichments", [])
