@@ -50,7 +50,7 @@ class PipelineOrchestrator:
                 else:
                     # PROYECCIÓN GENÉRICA: Si encontramos una lista y la ruta continúa,
                     # recorremos cada elemento de la lista extrayendo la sub-ruta restante.
-                    remaining_path = ".".join(parts[i:])
+                    remaining_path = ".".join(parts[i+1:])
                     results = []
                     for item in current:
                         val = self._get_nested_value(item, remaining_path)
@@ -70,7 +70,7 @@ class PipelineOrchestrator:
         return current
 
     async def obtener_o_ejecutar_enriquecimiento(
-        self, engine, bridge, plugin_name: str, match_key: str, match_value: str, cardinality: str, plugin_params: dict, param_name: str = None
+        self, engine, bridge, plugin_name: str, match_key: str, match_value: str, cardinality: str, plugin_params: dict, param_name: str = None, expediente_valor: str = None
     ):
         if plugin_name not in self.cache_enriquecimientos:
             self.cache_enriquecimientos[plugin_name] = {}
@@ -80,7 +80,7 @@ class PipelineOrchestrator:
             self.locks[plugin_name][match_value] = asyncio.Lock()
 
         async with self.locks[plugin_name][match_value]:
-            # 1. Comprobar Caché
+            # 1. Comprobar Caché en Memoria (RAM)
             if match_value in self.cache_enriquecimientos[plugin_name]:
                 logger.info(f"   ⚡ [CACHE HIT] '{plugin_name}' para '{match_key}: {match_value}' recuperado de la RAM.")
                 return self.cache_enriquecimientos[plugin_name][match_value]
@@ -95,10 +95,12 @@ class PipelineOrchestrator:
                 if cardinality == "one-to-one":
                     await bridge.handle_document(doc_sec)
 
-            # 🎯 INYECCIÓN 100% AGNÓSTICA BASADA EN CONFIGURACIÓN YAML
+            # 🎯 INYECCIÓN 100% AGNÓSTICA: Pasamos parámetros + partida + expediente resuelto
             kwargs_ejecucion = dict(plugin_params)
             if param_name and match_value:
                 kwargs_ejecucion[param_name] = match_value
+            if expediente_valor:
+                kwargs_ejecucion["expediente"] = expediente_valor
 
             await engine.run_plugins_parallel(
                 [plugin_name], 
@@ -193,6 +195,10 @@ def run_pipeline(
         for doc_prin in registros_principales:
             metadatos_doc = doc_prin.metadatos or {}
             
+            # 🟢 Extraer de forma agnóstica el expediente usando la configuración de extraction_keys
+            expediente_dotted_path = extraction_keys.get("expediente", "expediente")
+            expediente_valor = orchestrator._get_nested_value(metadatos_doc, expediente_dotted_path) or doc_prin.id_externo
+
             # Contenedor unificado en memoria para el JSON Maestro de este expediente
             paquete_maestro = {
                 "documento_principal": doc_prin,
@@ -221,7 +227,8 @@ def run_pipeline(
                     match_value=match_value,
                     cardinality=cardinality,
                     plugin_params=enrich_params,
-                    param_name=param_name
+                    param_name=param_name,
+                    expediente_valor=expediente_valor  # 🟢 Inyectamos el expediente capturado por el orquestador
                 )
 
                 paquete_maestro["enriquecimientos"][p_name] = {
@@ -233,8 +240,6 @@ def run_pipeline(
 
             # 3. Consolidación Final en Memoria y Envío al Bridge de Chaskiwasi
             logger.info(f" -> [MAESTRO] Consolidando expediente {doc_prin.id_externo} con sus fuentes secundarias...")
-            
-            # Aquí entregamos el paquete unificado en memoria al bridge para el análisis de IA y la generación del JSON Maestro
             await bridge.handle_pipeline_maestro(paquete_maestro)
 
         logger.success(f"[★★★ PIPELINE '{cfg.get('pipeline_name')}' COMPLETADO CON ÉXITO ★★★]")

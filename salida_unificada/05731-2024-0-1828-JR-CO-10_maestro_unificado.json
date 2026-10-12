@@ -1,0 +1,66 @@
+{
+  "id_externo_principal": "05731-2024-0-1828-JR-CO-10",
+  "fuente_principal": "remaju",
+  "documento_principal": {
+    "remate": {
+      "expediente": "05731-2024-0-1828-JR-CO-10",
+      "distritoJudicial": "LIMA",
+      "instancia": "JUZGADO ESPECIALIZADO",
+      "materia": "EJECUCION DE GARANTIAS",
+      "resolucion": "DIECISIETE Y DIECIOCHO",
+      "fechaResolucion": "28/04/2026",
+      "tipoCambio": "S/. 3.45 a la fecha 09/10/2026 según la SBS.",
+      "convocatoria": "PRIMERA CONVOCATORIA",
+      "tasacion": "$ 6,000.00",
+      "precioBase": "$ 4,000.00",
+      "incrementoEntreOfertas": "$ 12.00",
+      "arancel": "S/. 275.00",
+      "oblaje": "$ 600.00",
+      "descripcion": "INMUEBLE UBICADO EN LA AV. GENERAL SALAVARRY NRO. 2963, DEPOSITO 29, SÓTANO 2, URB. DEL FUNDO ORRANTIA DEL MAR, DISTRITO DE SAN ISIDRO, PROVINCIA Y DEPARTAMENTO DE LIMA, INSCRITO EN LA PARTIDA ELECTRÓNICA NRO. 13676277 DEL REGISTRO DE PROPIEDAD INMUEBLE DE LIMA.",
+      "archivoUrl": "resolucion_05731-2024-0-1828-JR-CO-10.pdf"
+    },
+    "inmuebles": [
+      {
+        "departamento": "LIMA",
+        "provincia": "LIMA",
+        "distrito": "SAN ISIDRO",
+        "partidaRegistral": "['13676277']",
+        "tipoInmueble": "DEPOSITO",
+        "direccion": "INMUEBLE UBICADO EN LA AV. GENERAL SALAVARRY NRO. 2963, DEPOSITO 29, SÓTANO 2, URB. DEL FUNDO ORRANTIA DEL MAR",
+        "cargaYGravamen": "ASIENTO D00003: HIPOTECA CONSTITUIDA HASTA POR LA SUMA DE S/ 1’281,226.73 SOLES FAVOR DEL BANCO DE CRÉDITO DEL PERÚ.",
+        "porcentajeRematar": "100 %"
+      }
+    ],
+    "cronograma": {
+      "publicacionInicio": "13/10/2026 00:00:00 AM",
+      "publicacionFin": "22/10/2026 23:59:59 PM",
+      "validacionInscripcionInicio": "23/10/2026 00:00:00 AM",
+      "validacionInscripcionFin": "27/10/2026 23:59:59 PM",
+      "ofertasInicio": "28/10/2026 12:00:00 PM",
+      "ofertasFin": "29/10/2026 11:59:59 AM",
+      "pagoSaldoInicio": "30/10/2026 00:00:00 AM",
+      "pagoSaldoFin": "03/11/2026 23:59:59 PM",
+      "validacionSaldoInicio": "04/11/2026 00:00:00 AM",
+      "validacionSaldoFin": "06/11/2026 23:59:59 PM"
+    },
+    "demandantes_validados_ia": [
+      "BANCO DE CREDITO DEL PERU"
+    ],
+    "demandados_validados_ia": [
+      "PEREZ CEPEDA, KELLY BEATRIZ"
+    ],
+    "resolucion_judicial_analisis": {
+      "direccion_inmueble": "AV. GENERAL SALAVARRY NRO. 2963, ESTACIONAMIENTO 38, SÓTANO 3, URB. DEL FUNDO ORRANTIA DEL MAR, DISTRITO DE SAN ISIDRO, PROVINCIA Y DEPARTAMENTO DE LIMA",
+      "requiere_cartel": false,
+      "campos_faltantes_ia": [],
+      "completado_exitosamente": true
+    }
+  },
+  "enriquecimientos_consolidados": {
+    "sunarp": {
+      "llave_usada": "partidaRegistral",
+      "cardinality": "one-to-many",
+      "registros": {}
+    }
+  }
+}
